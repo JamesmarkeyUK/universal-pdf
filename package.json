@@ -1,6 +1,6 @@
 {
   "name": "universal-pdf",
-  "version": "0.6.19",
+  "version": "0.6.20",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -70,7 +70,8 @@
     "dist:linux": "npm run build:desktop && electron-builder --linux",
     "cap:sync": "npm run build:mobile && npx cap sync && npm run check:mobile-bundle",
     "cap:open:ios": "npx cap open ios",
-    "cap:open:android": "npx cap open android"
+    "cap:open:android": "npx cap open android",
+    "test:redact-covers": "node e2e/redact-covers-match.e2e.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",
