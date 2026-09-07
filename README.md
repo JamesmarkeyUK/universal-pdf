@@ -121,6 +121,14 @@ the app is running reuses the existing window, and **opens one if there isn't
 one**, which on macOS is what closing the last window leaves you with (the app
 keeps running). See `openFromOs` in [`electron/main.cjs`](electron/main.cjs).
 
+**Saving follows the document.** A PDF opened from a folder on the machine —
+by double-click, drag-and-drop or the file chooser — offers to save back into
+**that folder** rather than Electron's default `~/Downloads`, and that applies
+to *Export*, compress and convert as well as *Save and exit*. A file with no
+folder of its own (a recent replayed from the browser's storage, the example
+PDF, conversion output) leaves the last real folder in place. See
+[`docs/README.md`](docs/README.md) → *Where the Save dialog opens (desktop)*.
+
 **Each target must be built on its own OS.** electron-builder packages a
 platform-native binary, so cross-building from a plain Linux host won't produce
 a working Windows `.exe`. The first run downloads the Electron binary (~100 MB).

@@ -32,6 +32,16 @@ declare global {
         bytes: Uint8Array
       ): Promise<{ ok: boolean; cancelled?: boolean; path?: string; error?: string }>
       /**
+       * Report the file the app has just opened, so every Save dialog after it
+       * starts in that file's folder rather than ~/Downloads.
+       *
+       * Pass the `File` itself — the path is resolved on the other side of the
+       * bridge, which is the only place that can (`webUtils.getPathForFile`).
+       * A file that was never on disk says nothing and leaves the last known
+       * folder standing.
+       */
+      rememberOpenedFile(file: File | null): void
+      /**
        * The unsaved-changes guard. The main process holds the window's × when
        * `set(true)` was the last thing it heard, asks the renderer over
        * `onCloseRequest`, and closes for real when `allowClose()` answers.

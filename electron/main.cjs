@@ -1,9 +1,10 @@
-const { app, BrowserWindow, dialog, ipcMain, screen, shell } = require('electron')
+const { app, BrowserWindow, dialog, ipcMain, screen, session, shell } = require('electron')
 const path = require('node:path')
 const fs = require('node:fs')
 const defaultApp = require('./defaultApp.cjs')
 const previewPane = require('./previewPane.cjs')
 const libreOffice = require('./libreOffice.cjs')
+const downloads = require('./downloads.cjs')
 const { installHubHandoff } = require('@unisim/sdk/electron')
 
 // Set by `npm run electron:dev` to load the live Vite dev server. When unset
@@ -27,6 +28,45 @@ let windowLoaded = false
 // PDF the app was launched with (double-click / "Open with → Universal PDF"),
 // held until the window has finished loading.
 let pendingPdfPath = null
+
+// Folder the open document came off the disk from, or null when it did not come
+// off the disk at all. Every save dialog starts here.
+//
+// Someone who opened a contract out of a client folder is saving the signed
+// copy back beside it — not into the same pile as every browser download they
+// have ever made, which is where Electron's own default (~/Downloads) puts it.
+//
+// Fed from both directions: a document handed over by the OS, whose path this
+// process already has, and one picked or dropped in the page, whose path only
+// the preload can resolve (`webUtils.getPathForFile`).
+//
+// A document that never came off the disk — a recent replayed from storage, a
+// converted file, the example PDF — leaves this ALONE rather than clearing it.
+// It is the last folder the user actually chose a document from, which is the
+// same "remember where I was working" every desktop app keeps, and a better
+// guess than falling back to ~/Downloads mid-session.
+let lastOpenFolder = null
+
+function rememberOpenFolder(filePath) {
+  if (!filePath) return
+  try {
+    const folder = path.dirname(filePath)
+    // Checked, because a folder that has since been unplugged or deleted (a
+    // document opened off a USB stick, then pulled out) would open the dialog
+    // on nothing at all. A path we cannot see is simply not an answer, and the
+    // previous one stands.
+    if (fs.existsSync(folder)) lastOpenFolder = folder
+  } catch {
+    // Unreadable path — keep whatever we had.
+  }
+}
+
+// `name` placed in the open document's folder. Falls back to the bare filename,
+// which is Electron's cue to use its own default folder.
+function suggestedSavePath(name) {
+  const base = path.basename(String(name || 'document.pdf'))
+  return lastOpenFolder ? path.join(lastOpenFolder, base) : base
+}
 
 // Whether the open document has amendments that no saved file contains. Owned
 // by the renderer — it is the only side that knows what is on the page — and
@@ -57,6 +97,9 @@ function pdfPathFromArgv(argv) {
 function sendPdf(win, filePath) {
   try {
     const bytes = fs.readFileSync(filePath)
+    // Read succeeded, so this folder exists and holds the document now on
+    // screen — where its exports should be offered back.
+    rememberOpenFolder(filePath)
     win.webContents.send('open-pdf', { name: path.basename(filePath), bytes })
   } catch (err) {
     console.error('Failed to read PDF passed from the OS:', err)
@@ -266,6 +309,13 @@ if (!gotLock) {
   // call (Launch Services, xdg-mime, the registry) that a sandboxed renderer
   // has no way to reach.
   // The unsaved-changes guard's two halves — see `win.on('close')` above.
+  // The page reporting which file it just opened — see `lastOpenFolder`. A
+  // send, not an invoke: nothing waits on the answer, and an open must never
+  // be held up by bookkeeping about where a later save might go.
+  ipcMain.on('open-folder:set', (_event, filePath) => {
+    rememberOpenFolder(typeof filePath === 'string' ? filePath : null)
+  })
+
   ipcMain.on('unsaved:set', (_event, dirty) => {
     unsavedChanges = !!dirty
   })
@@ -285,7 +335,9 @@ if (!gotLock) {
     try {
       const { canceled, filePath } = await dialog.showSaveDialog(mainWindow ?? undefined, {
         title: 'Save PDF',
-        defaultPath: suggestedName,
+        // Beside the document that was opened, not in ~/Downloads — see
+        // `lastOpenFolder`.
+        defaultPath: suggestedSavePath(suggestedName),
         filters: [{ name: 'PDF', extensions: ['pdf'] }],
       })
       if (canceled || !filePath) return { ok: false, cancelled: true }
@@ -326,6 +378,25 @@ if (!gotLock) {
     // system browser as a stranger — the desktop app's session lives here and
     // nowhere else.
     installHubHandoff({ icon: path.join(__dirname, '..', 'public', 'icon-512.png') })
+    // Every export the page hands out — the Export dialog, a compressed copy,
+    // a converted document — leaves the renderer as an ordinary browser
+    // download, because that is the one path that also works in the web build.
+    // Electron answers those with a Save dialog rooted in ~/Downloads; this
+    // moves it to the open document's folder instead, in one place, without
+    // every export button needing to know it is running on a desktop.
+    //
+    // ⚠️ Registered on the shared default session at `ready`, NOT per window:
+    // closing and reopening a window (the ordinary state of things on macOS)
+    // would otherwise stack a second listener on the same session for every
+    // window ever built.
+    //
+    // The dialog is OURS rather than Chromium's, because Chromium's writes the
+    // part-downloaded file into the destination folder as it goes — and now
+    // that the destination is the open document's own folder, that is a
+    // scratch file appearing next to the user's PDF. electron/downloads.cjs
+    // stages every download in AppData and moves it in when it is whole;
+    // `suggestedSavePath` still decides where the dialog opens.
+    downloads.installAll(session.defaultSession, suggestedSavePath)
     // Guarded, because `open-file` can arrive before this runs and builds the
     // window itself — an unguarded call would answer one document with two
     // windows.

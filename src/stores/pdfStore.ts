@@ -10,6 +10,7 @@ import { useFormStore } from './formStore'
 import { useSearchStore } from './searchStore'
 import { useSignatureStore } from './signatureStore'
 import { markSaved, noteStructuralEdit } from '../lib/unsavedChanges'
+import { rememberOpenFolder } from '../lib/openFolder'
 import type { QrPlacement } from '../lib/qr/design'
 
 // Restore a recent's saved edits into the live stores. Applies whenever the
@@ -303,6 +304,11 @@ export const usePdfStore = create<PdfState>((set, get) => ({
         importNotice: options?.notice ?? null,
         lockedFile: null
       })
+      // Desktop only: the folder this document came off the disk from, which is
+      // where the Save dialog will start rather than ~/Downloads. Said here,
+      // once the document is genuinely open, so a file that failed to parse
+      // never redirects the next save. See lib/openFolder.ts.
+      rememberOpenFolder(file)
       // Re-hydrate any signature-request boxes embedded in the PDF (from a prior
       // export) so a reopened / shared file's boxes are interactive again. The
       // doc is already on screen; this just drops the boxes in a beat later.

@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron')
+const { contextBridge, ipcRenderer, webUtils } = require('electron')
 
 // PDFs opened via the OS (double-click / "Open with → Universal PDF") are read
 // by the main process and pushed here over IPC. The React app subscribes after
@@ -50,6 +50,29 @@ contextBridge.exposeInMainWorld('desktop', {
   // — a sandboxed renderer has no filesystem and a browser download would put
   // the PDF in ~/Downloads without ever asking where it should go.
   savePdf: (suggestedName, bytes) => ipcRenderer.invoke('save-pdf', { suggestedName, bytes }),
+  // Where the document now open came from, so saving it starts in that folder
+  // instead of ~/Downloads.
+  //
+  // ⚠️ This has to happen HERE and not in the page: the renderer is sandboxed
+  // and since Electron 32 a `File` carries no `.path` at all, so
+  // `webUtils.getPathForFile` — a preload-only API — is the only thing left
+  // that can turn the File the user picked back into a path on disk.
+  //
+  // ⚠️ A File that was never on disk answers with an empty string, and that
+  // says NOTHING and is not reported. It has to work that way: a PDF handed
+  // over by the OS reaches the page as bytes, which the page turns into a
+  // synthetic File — so a pathless file here is routinely the very document
+  // whose folder the main process has just learnt the hard way, and reporting
+  // it would erase the answer a beat after finding it.
+  rememberOpenedFile: (file) => {
+    let filePath = null
+    try {
+      if (file) filePath = webUtils?.getPathForFile?.(file) || null
+    } catch {
+      filePath = null
+    }
+    if (filePath) ipcRenderer.send('open-folder:set', filePath)
+  },
   // Unsaved-changes guard. `set` keeps the main process told whether closing
   // the window would lose a file; `onCloseRequest` is main asking the question
   // it holds the × for; `allowClose` is the answer that lets it through.

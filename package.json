@@ -24,6 +24,8 @@
     "test:exit-guard": "node e2e/exit-guard.e2e.mjs",
     "test:exit-guard:desktop": "node e2e/exit-guard-desktop.e2e.mjs",
     "test:os-open:desktop": "node e2e/os-open-desktop.e2e.mjs",
+    "test:save-folder:desktop": "node e2e/save-folder-desktop.e2e.mjs",
+    "test:download-staging:desktop": "node e2e/download-staging.e2e.mjs",
     "test:handoff": "node e2e/hub-handoff.e2e.mjs",
     "test:pinch": "node e2e/pinch-zoom.e2e.mjs",
     "test:actions": "node e2e/actions-menu.e2e.mjs",

@@ -1287,6 +1287,114 @@ Tested by `npm run test:exit-guard` (the popup and its answers, in a browser)
 and `npm run test:exit-guard:desktop` (the held window close and the native
 save, driving the real Electron app). Both need the dev server on :5174.
 
+## Where the Save dialog opens (desktop)
+
+*(2026-09-07, owner ask: "when saving a pdf that was opened on device, the export
+popup should automatically show the location where it was opened, not default to
+the downloads")*
+
+A PDF opened from a folder on the machine offers to save back **into that
+folder**. Electron's own default is `~/Downloads`, which means every edited
+document had to be dragged home by hand afterwards.
+
+The answer lives in one variable in the main process — `lastOpenFolder` in
+`electron/main.cjs` — and two places read it:
+
+- **`save-pdf`** ("Save and exit") passes `defaultPath` as the suggested name
+  *inside* that folder rather than a bare filename.
+- **Every export**, which leaves the renderer as an ordinary browser download
+  because that is the one path the web build also has. `electron/downloads.cjs`
+  wires a `will-download` listener onto `session.defaultSession` at `ready`
+  (`downloads.installAll(session.defaultSession, suggestedSavePath)`) and puts
+  the same `defaultPath` on the save dialog — so the Export dialog, a compressed
+  copy and a converted document all land in the right place without a single
+  export button knowing it is running on a desktop.
+  ⚠️ **The listener goes on the shared default session, not per window.**
+  Registering per window stacks a second listener for every window ever built,
+  which on macOS (where closing the last window keeps the app alive) is the
+  ordinary state of things.
+
+⚠️ **The renderer cannot work the folder out for itself.** It is sandboxed, it
+sees a `File`, and since Electron 32 a `File` has no `.path` at all.
+`webUtils.getPathForFile` — preload-only — is the sole way back to a path, so
+`lib/openFolder.ts` is a one-line message to the bridge and nothing more.
+
+⚠️ **A pathless file says NOTHING; it does not clear the folder.** This is the
+trap the third check in the test exists for. A PDF handed over by the OS
+(double-click, "Open with") is read in the *main* process and reaches the page
+as **bytes**, which the page turns into a synthetic `File` — so a bridge that
+reported "no folder" as "forget the folder" would erase, one beat later, the
+answer main had just been handed, and the dialog would open in `~/Downloads` for
+the exact case the feature exists for. Files replayed from IndexedDB (recents),
+the example PDF and conversion output are pathless for the same reason. Leaving
+the last real folder standing is also the better behaviour on its own terms: it
+is where the user was working, which is what every desktop app remembers.
+
+`lib/openFolder.ts` is called from `loadFile` in the store — the one choke point
+every open goes through — and only once the document is genuinely open, so a
+file that fails to parse never redirects the next save.
+
+Tested by `npm run test:save-folder:desktop` (needs the dev server on :5174),
+which drives the real Electron app with `dialog.showSaveDialog` replaced by a
+recorder: nothing is written and no OS dialog waits on a human. It checks all
+four states — nothing opened yet (a bare name, left to Electron), a file picked
+in the page, a file handed over by the OS, and a download. Verified to fail on
+all three behavioural checks with the fix stashed.
+
+## Downloads are staged in AppData, not in the folder you save into
+
+*(2026-09-07, owner ask: "when reading / editing there's a tmp file created in
+the folder of the pdf. if it's needed please put it in the AppData folder")*
+
+Chromium writes a download **into its destination folder as it arrives**. The
+file is there, under its final name, from the first byte — so for as long as the
+download takes there is a part-written file sitting in that folder, and if it is
+interrupted the fragment stays for good. Measured on a 40 MB download: a 14 MB
+`big.pdf` in the destination folder three seconds in.
+
+That was invisible while downloads went to `~/Downloads`. It stopped being
+invisible the moment the save dialog started opening in *the open document's own
+folder* (the section above) — the scratch file now appears next to the user's
+PDF.
+
+So `electron/downloads.cjs` takes the destination out of Chromium's hands:
+
+- the download is pointed at `<userData>/downloads-staging` — `%APPDATA%\Universal
+  PDF` on Windows, `~/Library/Application Support` on macOS — and the user is
+  asked where it should go **through our own `dialog.showSaveDialog`**, opened at
+  `suggestedSavePath` so it still lands beside the document;
+- when the download finishes, the staged file is moved into place: `rename`, and
+  a copy when that fails with `EXDEV`, which is not a nicety — staging is on the
+  system drive and the destination very often is not;
+- a cancelled dialog, a failed download and a failed move all delete the staged
+  copy, and anything a crash left behind is swept at the next launch.
+
+The destination folder therefore sees exactly one thing: the finished file,
+arriving whole in a single step.
+
+⚠️ **`setSavePath` must be called synchronously inside `will-download`.** Miss
+that turn of the loop — by awaiting the dialog first, which is the obvious way to
+write it — and Chromium falls back to its own routine, raises its own save
+dialog and writes straight into whatever folder it lands on. That is the exact
+behaviour being fixed, and it comes back silently.
+
+⚠️ **This is why the download dialog is ours.** Chromium's cannot be asked where
+it opened, which is what `save-folder-desktop.e2e.mjs` reads, and it is the one
+that writes early.
+
+Tested by `npm run test:download-staging:desktop` (needs the dev server on
+:5174). It trickles a 40 MB download out of a local server — an export that
+finishes instantly cannot be caught in the act — and checks the destination
+folder is empty mid-download while the fragment is in AppData, that the file
+lands whole and alone, and that cancelling leaves nothing anywhere. Verified to
+fail on the first two checks against the pre-fix behaviour (`setSavePath`
+straight to the destination), reporting the 14 MB fragment above.
+
+⚠️ **It launches with its own `--user-data-dir`.** The single-instance lock is
+keyed on that folder, so a copy of the app left open — or another desktop spec —
+otherwise makes the launch quit before Playwright attaches, with no window and
+no error worth the name.
+
 ## Selecting text, and double-clicking a word
 
 The *Select text* tool overlays `TextSelectLayer` — a transparent, selectable
