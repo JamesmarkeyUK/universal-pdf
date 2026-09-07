@@ -43,6 +43,16 @@ function persistDismissed() {
 // It is deliberately not a toast: it must stay up for exactly as long as the
 // state it describes, and go the instant the thing lands. Nothing is timed.
 //
+// ⚠️ The card is SEE-THROUGH (James, 2026-09-06: "make this popup transparent so
+// you can click behind it and still see the signature / object"). It was
+// `bg-white/95` + `backdrop-blur`, which is opaque in practice — sitting in the
+// centre of the page it hid the very spot the user was being told to tap, along
+// with the armed signature's cursor ghost and whatever they were aiming at. The
+// backdrop blur mattered more than the alpha did: even at a low opacity it
+// smears everything underneath, so it is gone rather than softened. Legibility
+// is bought back with a white text halo instead of an opaque plate, so the text
+// survives a dark region of the page without the card having to hide it.
+//
 // ⚠️ It sits in the MIDDLE of the document area, not under the toolbar (James,
 // 2026-09-05: "the tooltip that appears at the top for signature placement etc
 // needs to be more prominent - maybe in the centre of the screen, with a don't
@@ -159,7 +169,12 @@ export default function PlacementHint() {
           tall one ever reaches this far down. */}
       <div
         data-placement-hint
-        className="flex w-max max-w-full flex-col items-center gap-3 rounded-2xl bg-white/95 px-6 py-5 text-center shadow-2xl ring-2 ring-orange-400 backdrop-blur"
+        // ⚠️ No `backdrop-blur` here, and don't reintroduce one: a blur hides
+        // what is behind the card whatever the background alpha is, which is
+        // the thing this card is not allowed to do. The orange ring and the
+        // drop shadow are what keep it prominent (James, 2026-09-05) now that
+        // the fill no longer is.
+        className="flex w-max max-w-full flex-col items-center gap-3 rounded-2xl bg-white/45 px-6 py-5 text-center shadow-xl ring-2 ring-orange-400"
       >
         <span className="flex items-center gap-2.5">
           <span
@@ -172,7 +187,11 @@ export default function PlacementHint() {
               code" came out one word per line, seven lines tall, on a 390px
               screen. Asking for the single-line width first and clamping it
               means it wraps only when it genuinely has to. */}
-          <span className="text-[15px] font-semibold leading-snug text-slate-900">
+          {/* The white halo is what replaces the opaque plate the card used to
+              be — it keeps the sentence readable over a dark photo or a filled
+              table cell without putting anything solid between the reader and
+              the page they are being told to tap. */}
+          <span className="text-[15px] font-semibold leading-snug text-slate-900 [text-shadow:0_0_3px_#fff,0_0_9px_#fff]">
             {prompt.label}
           </span>
         </span>
@@ -185,13 +204,21 @@ export default function PlacementHint() {
           />
         )}
         {prompt.detail && (
-          <span className="max-w-[260px] truncate text-[13px] text-slate-500">{prompt.detail}</span>
+          <span className="max-w-[260px] truncate text-[13px] text-slate-600 [text-shadow:0_0_3px_#fff,0_0_8px_#fff]">
+            {prompt.detail}
+          </span>
         )}
+        {/* ⚠️ The ONLY part of the card that takes a pointer, and therefore the
+            only part that can eat the tap the card is asking for — so the two
+            buttons keep a solid fill while the card around them does not. That
+            reads as the honest thing it is: the opaque strip is where a tap
+            hits a button, the transparent everything-else is where it goes
+            through to the page. */}
         <span className="pointer-events-auto flex items-center gap-2">
           <button
             type="button"
             onClick={prompt.cancel}
-            className="rounded-full bg-slate-100 px-4 py-1.5 text-[13px] font-semibold text-slate-700 hover:bg-slate-200"
+            className="rounded-full bg-slate-100 px-4 py-1.5 text-[13px] font-semibold text-slate-700 shadow-sm hover:bg-slate-200"
           >
             Cancel
           </button>
@@ -200,7 +227,7 @@ export default function PlacementHint() {
             onClick={() => { persistDismissed(); setDismissed(true) }}
             // Hides the card and leaves the placement ARMED — it is a display
             // preference, not a way out of the state. Cancel is the way out.
-            className="rounded-full px-3 py-1.5 text-[13px] font-medium text-slate-500 hover:bg-slate-100 hover:text-slate-700"
+            className="rounded-full bg-white/80 px-3 py-1.5 text-[13px] font-medium text-slate-500 shadow-sm hover:bg-white hover:text-slate-700"
           >
             Don't show again
           </button>

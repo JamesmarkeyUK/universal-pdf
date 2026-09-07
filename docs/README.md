@@ -472,7 +472,7 @@ infinite render loop and replaced the app with *"Something went wrong"* — see
 *A `FloatingPanel` positions itself on the NODE, never in state* below. There is
 no route to it today because of this removal, and the loop was fixed anyway.
 
-Four things about it are load-bearing:
+Five things about it are load-bearing:
 
 - ⚠️ **It is not a toast.** It is up for exactly as long as the armed state and
   goes the moment the thing lands. Nothing about it is timed, and there is no
@@ -481,6 +481,21 @@ Four things about it are load-bearing:
   page, so everything but Cancel is `pointer-events: none`. `e2e/placement-hint`
   asserts this by dropping a signature *through* the banner rather than by
   reading the CSS, which would pass on a child that re-enabled events.
+- ⚠️ **The card is see-through** (James, 2026-09-06: *"make this popup
+  transparent so you can click behind it and still see the signature /
+  object"*). It was `bg-white/95` + `backdrop-blur`, and centred on the page
+  that is an opaque plate over the exact spot the user is being told to tap —
+  hiding the target, and `AnnotationLayer`'s cursor-following ghost of the thing
+  about to land. It is `bg-white/45` with **no backdrop blur**: the blur was
+  doing more of the hiding than the alpha was, since it smears what is behind it
+  at any opacity. Don't put one back. Legibility comes from a white text halo
+  (`[text-shadow:0_0_3px_#fff,0_0_9px_#fff]`) rather than an opaque background,
+  so the label survives a dark photo or a filled table cell underneath, and the
+  orange ring plus the drop shadow carry the prominence the 2026-09-05 ask
+  wanted now that the fill no longer does. The **two buttons keep a solid fill**
+  — they are the only part of the card that takes a pointer, so the opaque strip
+  is exactly where a tap hits a button and everything transparent around it
+  passes through to the page.
 - ⚠️ **The two tools that need a payload are gated on the payload, not the
   tool.** `tool: 'image'` with nothing armed places nothing on a tap; a banner
   there would be an instruction that does not work.
@@ -1310,7 +1325,9 @@ export gave you back an underline you could not click.
   box at all, rather than drawn as one that silently does nothing.
 - **External links open in a new tab** (`target="_blank"`, `rel="noopener
   noreferrer"`). Navigating the tab itself would throw away the open document —
-  with its unsaved annotations and half-filled form fields in it.
+  with its unsaved annotations and half-filled form fields in it. ⚠️ **In the
+  native shells they do not open a tab at all** — see *External links leave the
+  app, and the app does not survive coming back* below.
 - ⚠️ **Only *Select* and *Hand* make the boxes live.** Under a drawing tool they
   go `pointer-events: none`. A highlight dragged across a hyperlink has to draw;
   a box that swallowed the gesture would be a worse bug than the one being
@@ -1361,6 +1378,75 @@ is `/pdf/`, so `dist` has to sit under a `pdf/` folder).
 assertions — "the javascript: URI is refused" and "the document is still open" —
 which is why the first is paired with the count of boxes that **do** render, or
 it would pass forever on a page with no link layer at all.
+
+## External links leave the app, and the app does not survive coming back
+
+`lib/externalLinks.ts`, installed once for the session from `App.tsx`. **Native
+shells only** — off one it attaches nothing.
+
+Owner, 2026-09-06, on iOS: *"going to this page in app then clicking a link
+(tested with the full credits link) then going back to app and you can't then
+close the window and have to force close the app"*. Confirmed as: the **About
+this app** dialog stays on screen and stops taking taps, while **the rest of the
+app still works** — the toolbar and the page react normally.
+
+⚠️ **The trigger is the round trip, not the dialog.** A `target="_blank"` in a
+Capacitor WebView never opens a tab. `WebViewDelegationHandler.decidePolicyFor`
+(`@capacitor/ios`) sees an off-origin top-level navigation, cancels it, and calls
+`UIApplication.shared.open(url)` — which backgrounds the **whole app** and hands
+the URL to Safari. Android does the same thing with an `ACTION_VIEW` intent. The
+app is then resumed from the background, and what comes back wrong is its
+`position: fixed` layers; everything in normal flow is fine. That is exactly the
+split reported — the dialog's overlay and its card are both `position: fixed`,
+and nothing else on that screen is.
+
+So the fix does not touch the dialog, and nothing in `externalLinks.ts` knows it
+exists. It removes the round trip the failure needs: on a native shell an
+external link is opened in the **in-app browser** (`SFSafariViewController` /
+Custom Tab) instead, which is presented over the app rather than replacing it.
+The app is never backgrounded, the sheet has its own Done button, and there is no
+resume to survive.
+
+Three things about it are load-bearing:
+
+- ⚠️ **A document-level CAPTURE listener, not a prop on each link.** Almost none
+  of these links are ours: the About dialog, the privacy note, the changelog and
+  the nav bar are all `@unisim/sdk` components that hard-code
+  `<a target="_blank">`, and `LinkLayer` renders one per link annotation in the
+  open PDF. Capture rather than bubble because the About dialog's card stops
+  propagation on itself (that is how a click inside it avoids closing the
+  dialog), so a bubble listener would never see the very link this was reported
+  against.
+- ⚠️ **`preventDefault()` runs first and synchronously.** Opening the sheet is
+  async (the plugin is dynamically imported, as in `nativeOpen.ts`, so it stays
+  out of the web bundle). A cancel awaited behind that import lands after the
+  event is over, by which point Capacitor has already backgrounded the app —
+  the whole thing this exists to stop.
+- ⚠️ **http(s) only.** `mailto:` and `tel:` reach the same handler — a PDF's
+  link annotation can carry either — and an in-app browser cannot render them
+  (iOS shows a blank sheet). Left alone they fall through to Capacitor, which
+  hands them to the OS and opens Mail or the dialler, which is what the same
+  link does in a browser. Same-origin hrefs are the app's own navigation and are
+  likewise left alone.
+
+**The web and desktop builds are untouched and must stay so.** The web build
+keeps ordinary `target="_blank"` tabs; Electron already routes these through
+`shell.openExternal` in `electron/main.cjs`. Neither needs an in-app browser.
+
+Covered by `scripts/externalLinks.test.mjs` (which href is taken, both
+directions) and `e2e/external-links.e2e.mjs`, which drives the real dialog and
+the real full-credits link. ⚠️ The e2e **fakes the shell**
+(`window.Capacitor.isNativePlatform`, which is all `isNativeShell()` reads) and
+asserts the **anchor was cancelled**, not that a sheet appeared: off a device
+`@capacitor/browser` falls back to `window.open`, so a tab opens on both paths
+and counting tabs proves nothing. The sheet itself needs a device.
+
+⚠️ **Adding the plugin regenerated three committed files** — `ios/App/Podfile`,
+`android/capacitor.settings.gradle` and `android/app/capacitor.build.gradle`.
+They are `cap sync` output, so they were regenerated with `npx cap update`
+rather than hand-edited. A native build that skips them links no `Browser`
+implementation, `Browser.open` rejects, and the handler's fallback puts the old
+`window.open` behaviour — and this bug — straight back.
 
 ## Zoom and page rendering
 

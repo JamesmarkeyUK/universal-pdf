@@ -35,6 +35,7 @@
     "test:flatten": "node e2e/flatten-export.e2e.mjs",
     "test:about": "node e2e/about-app.e2e.mjs",
     "test:placement-hint": "node e2e/placement-hint.e2e.mjs",
+    "test:external-links:e2e": "node e2e/external-links.e2e.mjs",
     "test:panel-dodge": "node e2e/panel-dodge.e2e.mjs",
     "test:open-fit": "node e2e/open-at-fit.e2e.mjs",
     "test:crisp": "node e2e/crisp-pages.e2e.mjs",
@@ -52,6 +53,7 @@
     "test:names": "node --experimental-strip-types scripts/exportName.test.mjs",
     "test:hosted-paths": "node --experimental-strip-types scripts/hostedPath.test.mjs",
     "test:heic-sniff": "node --experimental-strip-types scripts/heicSniff.test.mjs",
+    "test:external-links": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/externalLinks.test.mjs",
     "test:build-env": "node --experimental-strip-types scripts/buildEnv.test.mjs",
     "test:render-queue": "node --experimental-strip-types scripts/renderQueue.test.mjs",
     "check:mobile-bundle": "node scripts/verify-mobile-bundle.mjs",
@@ -69,6 +71,7 @@
   "dependencies": {
     "@capacitor/android": "^7.6.8",
     "@capacitor/app": "^7.1.2",
+    "@capacitor/browser": "^7.0.5",
     "@capacitor/core": "^7.6.8",
     "@capacitor/filesystem": "^7.1.8",
     "@capacitor/ios": "^7.6.8",

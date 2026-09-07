@@ -74,6 +74,7 @@ import { hasUnsavedChanges, onSavedStateChanged } from './lib/unsavedChanges'
 import { CONTAINER } from './lib/layout'
 import { OfficeImportError, toViewablePdf } from './lib/officeToPdf'
 import { isNativeShell, setStatusBarOverDarkChrome, subscribeNativeOpenPdf } from './lib/nativeOpen'
+import { installExternalLinkHandler } from './lib/externalLinks'
 
 const REPO_URL = 'https://github.com/universal-simulation-ltd/Universal_PDF'
 
@@ -234,6 +235,12 @@ export default function App() {
         .finally(() => setLaunching(false))
     })
   }, [loadFile])
+
+  // ⚠️ Native only, and it must be installed for the WHOLE session rather than
+  // by the components that own the links: nearly every external link in the app
+  // belongs to an `@unisim/sdk` dialog or to a PDF's own link annotations. See
+  // `lib/externalLinks.ts` for why leaving the app at all is the bug.
+  useEffect(() => installExternalLinkHandler(), [])
 
   // iOS / Android — a PDF opened through the share sheet or the chooser. Same
   // shape as the two paths above: a file turns up, or word that none is coming.
