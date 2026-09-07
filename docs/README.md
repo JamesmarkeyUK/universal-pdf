@@ -1153,11 +1153,28 @@ multi-megabyte data URL and the comparison would run on every window close.
 ⚠️ **Marks restored from recents are the baseline, not an amendment.** Reopening
 a document with your work on it and closing it again asks nothing.
 
-⚠️ **The desktop close is held in the MAIN process** (`win.on('close')` →
-`unsaved:close-request` → `unsaved:allow-close`), never by `beforeunload`.
-Electron shows no dialog for `beforeunload`; it silently refuses the close, so
-the × would simply stop working. The web build arms `beforeunload` and the
-desktop build does not — that split is deliberate and is asserted by the specs.
+⚠️ **`beforeunload` is armed in a REAL BROWSER ONLY.** Everywhere else it can
+refuse a close and show nothing for it, which is worse than not guarding at all.
+
+- **Desktop** holds the close in the MAIN process instead (`win.on('close')` →
+  `unsaved:close-request` → `unsaved:allow-close`). Electron shows no dialog for
+  `beforeunload`; it silently refuses the close, so the × would simply stop
+  working.
+- **The two Capacitor shells behave the same way** and were missed when the
+  above was written (fixed 2026-09-07). Checked in the plugin sources rather
+  than assumed: `BridgeWebChromeClient` (Android) implements `onJsAlert` and
+  `onJsConfirm` and **no** `onJsBeforeUnload`, and `WebViewDelegationHandler`
+  (iOS) implements the alert / confirm / text-input panels and **no** beforeunload
+  panel. Neither can ever put the question to the user. Nothing is lost by
+  standing down: a native app is not closed by unloading its document — the OS
+  tears the Activity or the view controller down — so the only unload reachable
+  in a shell is one the app did not ask for (a WebView reload after the content
+  process is jettisoned, say), and silently blocking *that* is the failure mode,
+  not the protection.
+
+In-app exits go through `requestExit`'s three-button popup on **every** platform,
+which is where the real guard lives. The split is asserted by the specs, in both
+directions — the browser is asked, a faked native shell is not.
 
 ⚠️ **Redactions are baked in by saving**, so "Save and exit" carries the same
 typed **REDACT** confirmation the Export dialog does. The rule itself lives once,

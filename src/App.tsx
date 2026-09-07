@@ -314,12 +314,27 @@ export default function App() {
   // Web: a browser tab can only be stopped by `beforeunload`, and only with the
   // browser's own wording — no three-button popup exists for it.
   //
-  // ⚠️ Deliberately NOT registered in the desktop app. Electron does not show a
-  // dialog for `beforeunload`; it just silently refuses to close the window, so
-  // this would cancel the close before the popup above was ever asked for and
-  // the × would look broken.
+  // ⚠️ A REAL BROWSER ONLY. Everywhere else this can refuse a close and show
+  // nothing for it, which is worse than not guarding at all.
+  //
+  // Electron does not show a dialog for `beforeunload`; it just silently
+  // refuses to close the window, so this would cancel the close before the
+  // popup above was ever asked for and the × would look broken.
+  //
+  // ⚠️ The two Capacitor shells behave the SAME WAY and were missed when that
+  // was written. Checked in the plugin sources rather than assumed:
+  // `BridgeWebChromeClient` (Android) implements `onJsAlert` and `onJsConfirm`
+  // and no `onJsBeforeUnload`, and `WebViewDelegationHandler` (iOS) implements
+  // the alert / confirm / text-input panels and no beforeunload panel either.
+  // Neither can therefore ever put the question to the user. Nothing is lost by
+  // standing down: a native app is not closed by unloading its document — the
+  // OS tears the Activity or the view controller down — so the only unload
+  // reachable in a shell is one the app did not ask for (a WebView reload after
+  // the content process is jettisoned, say), and silently blocking THAT is the
+  // failure mode, not the protection. In-app exits are covered by `requestExit`
+  // above on every platform, which is where the real three-button popup lives.
   useEffect(() => {
-    if (window.desktop) return
+    if (window.desktop || isNativeShell()) return
     function onBeforeUnload(e: BeforeUnloadEvent) {
       if (!usePdfStore.getState().doc || !hasUnsavedChanges()) return
       e.preventDefault()

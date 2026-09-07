@@ -303,6 +303,68 @@ const dialogType = await Promise.race([
 ])
 check('the browser asks before the tab goes', dialogType === 'beforeunload', dialogType)
 
+// ── ...but the native shells must NOT be asked ──────────────────────────────
+// ⚠️ `beforeunload` is a REAL-BROWSER-ONLY guard. Electron was already excluded
+// because it silently refuses the close instead of prompting; the two Capacitor
+// shells do exactly the same and were missed when that was written. Checked in
+// the plugin sources: `BridgeWebChromeClient` (Android) implements onJsAlert and
+// onJsConfirm and no onJsBeforeUnload, and `WebViewDelegationHandler` (iOS) has
+// the alert / confirm / text-input panels and no beforeunload panel — so
+// neither can ever put the question to the user, and a guard there can only
+// block silently.
+//
+// Nothing is lost: a native app is not closed by unloading its document, so the
+// only unload reachable in a shell is one the app did not ask for. In-app exits
+// go through `requestExit`'s three-button popup on every platform, which the
+// checks above cover.
+//
+// The shell is FAKED (`window.Capacitor.isNativePlatform`) — that is all
+// `isNativeShell()` reads.
+//
+// Negative control (2026-09-07, run): with `isNativeShell()` taken back out of
+// the guard's condition in App.tsx, "and it is not asked anyway" goes red with
+// `beforeunload` and every other check here stays green.
+console.log('\nInside a native shell the browser is never asked')
+const nativeCtx = await browser.newContext({ viewport: { width: 1440, height: 900 } })
+await nativeCtx.addInitScript(() => {
+  window.Capacitor = { isNativePlatform: () => true }
+})
+const nativePage = await nativeCtx.newPage()
+await nativePage.goto(BASE, { waitUntil: 'networkidle' })
+await nativePage.evaluate(async () => {
+  const { createExamplePdfFile } = await import('/src/lib/examplePdf.ts')
+  const { usePdfStore } = await import('/src/stores/pdfStore.ts')
+  await usePdfStore.getState().loadFile(await createExamplePdfFile())
+})
+await nativePage.waitForSelector('canvas', { timeout: 20000 })
+await nativePage.evaluate(async () => {
+  const { useAnnotationStore } = await import('/src/stores/annotationStore.ts')
+  useAnnotationStore.getState().add({
+    id: 'e2e-native-rect', pageIndex: 0,
+    type: 'rect', x: 60, y: 60, width: 180, height: 90, color: '#dc2626',
+  })
+})
+check(
+  'dirty, so a browser would have asked',
+  await nativePage.evaluate(async () => {
+    const { hasUnsavedChanges } = await import('/src/lib/unsavedChanges.ts')
+    return hasUnsavedChanges()
+  }),
+)
+const nativeDialog = new Promise((resolve) => {
+  nativePage.once('dialog', (d) => {
+    resolve(d.type())
+    d.dismiss().catch(() => {})
+  })
+})
+await nativePage.close({ runBeforeUnload: true })
+const nativeType = await Promise.race([
+  nativeDialog,
+  new Promise((r) => setTimeout(() => r('(none)'), 5000)),
+])
+check('and it is not asked anyway', nativeType === '(none)', nativeType)
+await nativeCtx.close()
+
 await browser.close()
 
 if (failures.length) {
