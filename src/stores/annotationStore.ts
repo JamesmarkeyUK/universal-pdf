@@ -34,6 +34,12 @@ interface AnnotationState {
   setStrokeWidth: (w: number) => void
   setLineSnap: (v: boolean) => void
   setFontSize: (s: number) => void
+  // Remember the size (in display pixels) the next text should be placed at,
+  // WITHOUT touching the selected annotation. The floating size pill sets a
+  // selected box's size absolutely — it knows the zoom, so it can convert
+  // display pixels to points itself — and then records the choice here so the
+  // next text matches. `setFontSize` is the relative nudge the toolbar uses.
+  setDefaultFontSize: (s: number) => void
   setFontFamily: (f: FontFamily) => void
   setSelected: (id: string | null) => void
   setSelectedIds: (ids: string[]) => void
@@ -142,6 +148,7 @@ export const useAnnotationStore = create<AnnotationState>((set) => ({
       }
       return { fontSize }
     }),
+  setDefaultFontSize: (fontSize) => set({ fontSize }),
   setFontFamily: (fontFamily) =>
     set((s) => {
       const sel = s.annotations.find((a) => a.id === s.selectedId)

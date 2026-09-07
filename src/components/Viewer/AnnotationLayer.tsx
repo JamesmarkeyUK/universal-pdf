@@ -35,30 +35,16 @@ import { requestWordSelect } from '../../lib/wordSelect'
 import { isPaleFill, redactFillHex } from '../../lib/redactGate'
 import { FONT_CSS } from '../../lib/fonts'
 import { effectiveRuns, runFontStyle, runHasStyle, runsToPlainText, runsToHtml, parseRunsFromDom, mergeRuns } from '../../lib/textRuns'
+import { LINE_HEIGHT, layoutText, textBoxSize } from '../../lib/textLayout'
 import type { Annotation, DrawAnnotation, ImageAnnotation, SignatureData, SignatureFieldAnnotation, SigAlign, TextAnnotation, Tool, TextRun } from '../../types/annotations'
 import type { QrPlacement } from '../../lib/qr/design'
 
 // On-screen font stacks, keyed by family id (shared with the toolbar + export).
 const FONT_STACK = FONT_CSS
 
-// Shared offscreen 2D context for measuring run widths in unscaled model space.
-// Konva itself measures with canvas measureText, so widths derived here match
-// the on-canvas advance, keeping the per-run layout and the editor aligned.
-const _measureCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : null
-const _measureCtx = _measureCanvas?.getContext('2d') ?? null
-
-// Width of one run at the annotation's (unscaled) font size + family.
-function runWidth(run: TextRun, fontSize: number, cssFamily: string): number {
-  if (!_measureCtx) return run.text.length * fontSize * 0.6
-  _measureCtx.font = `${runFontStyle(run)} ${fontSize}px ${cssFamily}`
-  return _measureCtx.measureText(run.text).width
-}
-
-// Total on-screen width (unscaled) of a text annotation across all its runs.
-function textWidth(a: TextAnnotation): number {
-  const cssFamily = FONT_STACK[a.fontFamily ?? 'sans']
-  return effectiveRuns(a).reduce((sum, r) => sum + runWidth(r, a.fontSize, cssFamily), 0)
-}
+// Konva `name` of the inner group holding a text annotation's run nodes, so a
+// live resize can counter-scale just the letters.
+const TEXT_RUNS_GROUP = 'text-runs'
 
 const HIGHLIGHT_STROKE_WIDTH = 16
 const HIGHLIGHT_OPACITY = 0.4
@@ -107,8 +93,11 @@ function isTransformerTarget(target: Konva.Node | null): boolean {
 function getAnnotationBBox(a: Annotation): { x: number; y: number; width: number; height: number } {
   switch (a.type) {
     case 'text': {
-      const w = Math.max(24, textWidth(a) + 8)
-      return { x: a.x - 2, y: a.y - 2, width: w + 4, height: a.fontSize * 1.25 + 4 }
+      const box = textBoxSize(a)
+      // An unwrapped text gets a little slack so a short word is still an easy
+      // grab; a wrapped one is the box the user dragged, exactly.
+      const w = a.wrapWidth && a.wrapWidth > 0 ? a.wrapWidth : Math.max(24, box.width + 8)
+      return { x: a.x - 2, y: a.y - 2, width: w + 4, height: box.height + 4 }
     }
     case 'rect':
     case 'ellipse':
@@ -358,7 +347,15 @@ function isResizable(a: Annotation): boolean {
   // Locked signature-request boxes (re-detected from an exported PDF) can't be
   // resized — their outline is baked into the page.
   if (a.type === 'sigfield') return !a.locked
-  return a.type === 'image' || a.type === 'rect' || a.type === 'ellipse' || a.type === 'redact'
+  return a.type === 'image' || a.type === 'rect' || a.type === 'ellipse' || a.type === 'redact' || a.type === 'text'
+}
+
+// Text gets side handles as well as corners: the corners scale the font (kept
+// proportional), the sides set the width the text wraps to. Everything else
+// resizes from its corners only.
+function anchorsFor(a: Annotation | null): string[] {
+  const corners = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+  return a?.type === 'text' ? [...corners, 'middle-left', 'middle-right'] : corners
 }
 
 function isTransformable(a: Annotation): boolean {
@@ -682,7 +679,16 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   const setLineSnap = useAnnotationStore((s) => s.setLineSnap)
   const setStrokeWidth = useAnnotationStore((s) => s.setStrokeWidth)
   const setColor = useAnnotationStore((s) => s.setColor)
-  const setFontSize = useAnnotationStore((s) => s.setFontSize)
+  const setDefaultFontSize = useAnnotationStore((s) => s.setDefaultFontSize)
+
+  // Width a text box is being dragged to, while a side handle is down. Held
+  // here rather than in the store so a drag doesn't leave a hundred undo steps
+  // behind it; the real wrapWidth is written once, on transformend.
+  const [liveWrap, setLiveWrap] = useState<{ id: string; width: number } | null>(null)
+  // Which Transformer handle is being dragged, latched during the gesture. The
+  // Transformer clears its own active anchor as part of finishing, and the
+  // scales alone can't tell a side handle from a corner dragged dead flat.
+  const activeAnchorRef = useRef('')
 
   // Two fingers are down on the viewer for a pinch-zoom (see PdfViewer). While
   // this is true the layer starts nothing and finishes nothing — the gesture
@@ -1778,7 +1784,7 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   // Resize / rotate patch for one node, resetting Konva's transient scale so
   // the new geometry lives in our model. Group resize also scales text/marks
   // and bakes pen strokes (none of which resize in a single selection).
-  function nodeTransformPatch(a: Annotation, node: Konva.Node): Partial<Annotation> | null {
+  function nodeTransformPatch(a: Annotation, node: Konva.Node, anchor = ''): Partial<Annotation> | null {
     const rotation = node.rotation()
     const sx = node.scaleX()
     const sy = node.scaleY()
@@ -1812,10 +1818,25 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
       } as Partial<Annotation>
     }
     if (a.type === 'text') {
-      const fontSize = Math.max(4, a.fontSize * sy)
+      const box = textBoxSize(a)
+      // A side handle re-wraps the text at the new width without touching the
+      // font. The corners are keepRatio, so they arrive with both scales equal
+      // and scale the type itself — carrying any wrap width along so a resized
+      // box keeps its shape. (Which handle it was has to come from the
+      // Transformer: a corner dragged perfectly horizontally leaves scaleY at 1
+      // too, and would otherwise be mistaken for a side handle.)
+      const sideOnly = anchor === 'middle-left' || anchor === 'middle-right'
       node.scaleX(1)
       node.scaleY(1)
-      return { x: node.x(), y: node.y(), fontSize, rotation } as Partial<Annotation>
+      if (sideOnly) {
+        // Two characters' worth of room is the floor — narrower than that and
+        // every word overflows, so the box would stop meaning anything.
+        const wrapWidth = Math.max(a.fontSize * 2, box.width * sx)
+        return { x: node.x(), y: node.y(), wrapWidth, rotation } as Partial<Annotation>
+      }
+      const fontSize = Math.max(4, a.fontSize * sy)
+      const wrapWidth = a.wrapWidth && a.wrapWidth > 0 ? Math.max(fontSize * 2, a.wrapWidth * sy) : undefined
+      return { x: node.x(), y: node.y(), fontSize, wrapWidth, rotation } as Partial<Annotation>
     }
     if (a.type === 'tick' || a.type === 'cross') {
       const size = Math.max(6, a.size * ((sx + sy) / 2))
@@ -1858,6 +1879,8 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
       })
       .filter((p): p is { id: string; patch: Partial<Annotation> } => !!p)
     if (patches.length) updateMany(patches)
+    activeAnchorRef.current = ''
+    setLiveWrap(null)
     tr.getLayer()?.batchDraw()
   }
 
@@ -1904,13 +1927,49 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
         height: newHeight,
         rotation
       } as Partial<Annotation>)
-    } else if (a.type === 'text' || a.type === 'tick' || a.type === 'cross') {
+    } else if (a.type === 'text') {
+      // Corners scale the type, sides re-wrap — nodeTransformPatch works out
+      // which from the scales Konva left behind (and resets them).
+      const patch = nodeTransformPatch(a, node, activeAnchorRef.current)
+      endTextTransform(node)
+      if (patch) update(a.id, patch)
+    } else if (a.type === 'tick' || a.type === 'cross') {
       update(a.id, {
         x: node.x(),
         y: node.y(),
         rotation
       } as Partial<Annotation>)
     }
+  }
+
+  // Live side-drag on a text box: the Transformer stretches the whole group, so
+  // undo that stretch on the runs and re-flow them into the width the handle is
+  // at. Corner drags are left alone — there the stretch IS the preview, because
+  // the corners scale the font. Nothing is written to the store until
+  // transformend, so a drag stays one undo step.
+  function onTextTransform(a: Annotation, e: Konva.KonvaEventObject<Event>) {
+    if (a.type !== 'text') return
+    const node = e.target as Konva.Group
+    const anchor = trRef.current?.getActiveAnchor() ?? ''
+    if (anchor) activeAnchorRef.current = anchor
+    const sx = node.scaleX() || 1
+    const runsGroup = node.findOne<Konva.Group>('.' + TEXT_RUNS_GROUP)
+    if (anchor !== 'middle-left' && anchor !== 'middle-right') {
+      runsGroup?.scaleX(1)
+      if (liveWrap) setLiveWrap(null)
+      return
+    }
+    runsGroup?.scaleX(1 / sx)
+    const width = Math.max(a.fontSize * 2, textBoxSize(a).width * sx)
+    if (!liveWrap || liveWrap.id !== a.id || Math.abs(liveWrap.width - width) > 0.01) {
+      setLiveWrap({ id: a.id, width })
+    }
+  }
+
+  function endTextTransform(node: Konva.Node) {
+    ;(node as Konva.Group).findOne<Konva.Group>('.' + TEXT_RUNS_GROUP)?.scaleX(1)
+    activeAnchorRef.current = ''
+    setLiveWrap(null)
   }
 
   function commitEdit(runs: TextRun[]) {
@@ -2073,13 +2132,17 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                 )
               }
               case 'text': {
-                // Rendered as a Group of per-run Text nodes laid out along one
-                // line (measured widths give each run's x offset), so bold /
-                // italic / underline / link can vary within the text. Events
-                // bubble from the child Texts up to the Group's shared handlers.
+                // Rendered as a Group of per-run Text nodes, positioned by the
+                // shared layout (measured widths give each run's x offset, and
+                // a wrapWidth splits them across lines), so bold / italic /
+                // underline / link can vary within the text. Events bubble from
+                // the child Texts up to the Group's shared handlers.
                 const cssFamily = FONT_STACK[a.fontFamily ?? 'sans']
-                const runs = effectiveRuns(a)
-                let offset = 0
+                // Mid side-drag the committed wrapWidth is still the old one, so
+                // lay out against the width the handle is currently at.
+                const shown = liveWrap && liveWrap.id === a.id ? { ...a, wrapWidth: liveWrap.width } : a
+                const lines = layoutText(shown)
+                const box = textBoxSize(shown)
                 return (
                   <Group
                     key={a.id}
@@ -2088,26 +2151,38 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                     y={a.y}
                     rotation={a.rotation ?? 0}
                     visible={a.id !== editingId}
+                    onTransform={(e) => onTextTransform(a, e)}
                     onDblClick={() => onTextDblClick(a)}
                     onDblTap={() => onTextDblClick(a)}
                   >
-                    {runs.map((run, i) => {
-                      const rx = offset
-                      offset += runWidth(run, a.fontSize, cssFamily)
-                      return (
-                        <Text
-                          key={i}
-                          x={rx}
-                          y={0}
-                          text={run.text}
-                          fill={a.color}
-                          fontSize={a.fontSize}
-                          fontFamily={cssFamily}
-                          fontStyle={runFontStyle(run)}
-                          textDecoration={run.underline || run.link ? 'underline' : ''}
-                        />
-                      )
-                    })}
+                    {/* Invisible sizing rect. A Group has no intrinsic size, so
+                        without this the Transformer's box would hug the INK —
+                        for a wrapped box whose last line is short, dragging the
+                        side handle would then scale from the ink width and the
+                        wrap width would creep on every drag. Non-listening, so
+                        it doesn't widen the clickable area. */}
+                    <Rect x={0} y={0} width={box.width} height={box.height} listening={false} />
+                    {/* The runs live one level down so a side drag can undo the
+                        Transformer's horizontal stretch on them (see
+                        onTextTransform) — the box follows the handle while the
+                        letters keep their shape and re-flow into it. */}
+                    <Group name={TEXT_RUNS_GROUP}>
+                      {lines.map((line, li) =>
+                        line.runs.map((run, i) => (
+                          <Text
+                            key={`${li}:${i}`}
+                            x={run.x}
+                            y={li * a.fontSize * LINE_HEIGHT}
+                            text={run.text}
+                            fill={a.color}
+                            fontSize={a.fontSize}
+                            fontFamily={cssFamily}
+                            fontStyle={runFontStyle(run)}
+                            textDecoration={run.underline || run.link ? 'underline' : ''}
+                          />
+                        ))
+                      )}
+                    </Group>
                   </Group>
                 )
               }
@@ -2451,11 +2526,14 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                 // can't turn a zoom into a zoom-plus-resize.
                 rotateEnabled={rotatable && !pinching}
                 resizeEnabled={resizable && !pinching}
-                keepRatio={!isMulti && single?.type === 'image'}
+                // Text corners scale the whole box (font included), so they
+                // have to stay proportional — the side handles are the ones
+                // that change width alone, by re-wrapping.
+                keepRatio={!isMulti && (single?.type === 'image' || single?.type === 'text')}
                 // Bigger rotate arm + anchors on touch so they clear the finger
                 // and are easy to grab; desktop keeps the compact sizing.
                 rotateAnchorOffset={coarsePointer ? 40 : 28}
-                enabledAnchors={resizable && !pinching ? ['top-left', 'top-right', 'bottom-left', 'bottom-right'] : []}
+                enabledAnchors={resizable && !pinching ? anchorsFor(isMulti ? null : single) : []}
                 borderStroke="#ea580c"
                 borderStrokeWidth={1.5}
                 borderDash={[6, 4]}
@@ -2754,23 +2832,18 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
             // clipped the wheel against the pill's own rounded edge.
             className="inline-flex items-center gap-0.5 bg-white rounded-full shadow-lg border border-slate-300 pl-1 pr-2 py-1"
           >
-            <button
-              type="button"
-              aria-label="Decrease text size"
-              onClick={(e) => { e.stopPropagation(); setFontSize(Math.max(8, fontSize - 2)) }}
-              className="w-8 h-8 rounded-full hover:bg-slate-100 text-lg font-semibold text-slate-700 leading-none"
-            >
-              −
-            </button>
-            <FontSizeField value={fontSize} min={8} max={144} onCommit={setFontSize} />
-            <button
-              type="button"
-              aria-label="Increase text size"
-              onClick={(e) => { e.stopPropagation(); setFontSize(Math.min(144, fontSize + 2)) }}
-              className="w-8 h-8 rounded-full hover:bg-slate-100 text-lg font-semibold text-slate-700 leading-none"
-            >
-              +
-            </button>
+            <FontSizeStepper
+              value={Math.round(t.fontSize * scale)}
+              min={8}
+              max={144}
+              onCommit={(px) => {
+                // Absolute, on THIS box: the number in the field is the size the
+                // text ends up, whatever it was before and whatever the zoom is
+                // (annotations store points, the pill talks display pixels).
+                update(t.id, { fontSize: px / scale } as Partial<Annotation>)
+                setDefaultFontSize(px)
+              }}
+            />
             <span className="w-px h-6 bg-slate-200 mx-0.5" />
             {styleBtn(allHave('bold'), () => applyStyle('bold'), 'B', 'Bold', 'font-bold')}
             {styleBtn(allHave('italic'), () => applyStyle('italic'), 'I', 'Italic', 'italic font-semibold')}
@@ -3546,7 +3619,7 @@ function SignatureOptionsModal({
 // rendered inside an IIFE where hooks can't live. `onMouseDown` stops
 // propagation so the pill's focus-preserving preventDefault doesn't block the
 // input from focusing.
-function FontSizeField({
+function FontSizeStepper({
   value,
   min,
   max,
@@ -3558,36 +3631,66 @@ function FontSizeField({
   onCommit: (n: number) => void
 }) {
   const [draft, setDraft] = useState(String(value))
-  // Re-sync when the value changes externally (stepper +/−, selecting another
-  // text) — but not while the field is focused, so typing isn't clobbered.
+  // Re-sync when the size changes under us (another box selected, a corner
+  // dragged) — but not while the field is focused, so typing isn't clobbered.
   const focusedRef = useRef(false)
   useEffect(() => {
     if (!focusedRef.current) setDraft(String(value))
   }, [value])
-  const commit = () => {
+  const clamp = (n: number) => Math.min(max, Math.max(min, n))
+  const commit = (n: number) => {
+    setDraft(String(n))
+    if (n !== value) onCommit(n)
+  }
+  const commitDraft = () => {
     const n = parseInt(draft, 10)
-    if (Number.isFinite(n)) onCommit(Math.min(max, Math.max(min, n)))
+    if (Number.isFinite(n)) commit(clamp(n))
     else setDraft(String(value))
   }
+  // ⚠️ +/− step from the DRAFT, not from `value`, and write the result straight
+  // back into it. The pill's own mousedown handler calls preventDefault to keep
+  // the caret in the text (so the B / I / U buttons can style a live
+  // selection), which means clicking + never blurs this field: stepping from
+  // `value` left a stale number sitting in a focused input, and the blur that
+  // finally came — when the user grabbed the box to drag it — committed that
+  // stale number back and shrank the text to its pre-click size.
+  const step = (delta: number) => {
+    const typed = parseInt(draft, 10)
+    commit(clamp((Number.isFinite(typed) ? typed : value) + delta))
+  }
+  const stepBtn = (delta: number, label: string, aria: string) => (
+    <button
+      type="button"
+      aria-label={aria}
+      onClick={(e) => { e.stopPropagation(); step(delta) }}
+      className="w-8 h-8 rounded-full hover:bg-slate-100 text-lg font-semibold text-slate-700 leading-none"
+    >
+      {label}
+    </button>
+  )
   return (
-    <span className="inline-flex items-baseline">
-      <input
-        type="text"
-        inputMode="numeric"
-        aria-label="Font size in points"
-        value={draft}
-        onMouseDown={(e) => e.stopPropagation()}
-        onFocus={(e) => { focusedRef.current = true; e.currentTarget.select() }}
-        onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
-        onBlur={() => { focusedRef.current = false; commit() }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { e.preventDefault(); commit(); e.currentTarget.blur() }
-          else if (e.key === 'Escape') { e.preventDefault(); setDraft(String(value)); e.currentTarget.blur() }
-        }}
-        className="w-6 text-xs font-medium text-right tabular-nums text-slate-700 bg-transparent outline-none rounded focus:bg-slate-100"
-      />
-      <span className="text-xs font-medium text-slate-500 pl-0.5">px</span>
-    </span>
+    <>
+      {stepBtn(-2, '−', 'Decrease text size')}
+      <span className="inline-flex items-baseline">
+        <input
+          type="text"
+          inputMode="numeric"
+          aria-label="Font size in points"
+          value={draft}
+          onMouseDown={(e) => e.stopPropagation()}
+          onFocus={(e) => { focusedRef.current = true; e.currentTarget.select() }}
+          onChange={(e) => setDraft(e.target.value.replace(/[^\d]/g, '').slice(0, 3))}
+          onBlur={() => { focusedRef.current = false; commitDraft() }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); commitDraft(); e.currentTarget.blur() }
+            else if (e.key === 'Escape') { e.preventDefault(); setDraft(String(value)); e.currentTarget.blur() }
+          }}
+          className="w-6 text-xs font-medium text-right tabular-nums text-slate-700 bg-transparent outline-none rounded focus:bg-slate-100"
+        />
+        <span className="text-xs font-medium text-slate-500 pl-0.5">px</span>
+      </span>
+      {stepBtn(2, '+', 'Increase text size')}
+    </>
   )
 }
 
@@ -3623,6 +3726,7 @@ function TextEditor({
   // blur doesn't commit and tear the editor down mid-operation.
   const formattingRef = useRef(false)
   const committedRef = useRef(false)
+  const wrapped = !!annotation.wrapWidth && annotation.wrapWidth > 0
 
   // Seed the editable HTML from the runs, once, then focus + select all so the
   // first keystroke replaces the placeholder text (matching the old input).
@@ -3715,7 +3819,7 @@ function TextEditor({
         position: 'absolute',
         // Pixel-align with the committed Konva <Text> so glyphs don't shift when
         // the edit ends. Konva draws the top-left at (x, y) with a "middle"
-        // baseline (glyph centre at y + fontSize/2). This box is 1.25×fontSize
+        // baseline (glyph centre at y + fontSize/2). This box is LINE_HEIGHT×fontSize
         // tall with its line centred by an equal line-height, so the glyph
         // centre sits at 0.625×fontSize from the top — nudging the box up by the
         // extra 0.125×fontSize lines the two centres up. The dashed affordance
@@ -3726,8 +3830,12 @@ function TextEditor({
         color: annotation.color,
         fontSize: (annotation.fontSize * scale) + 'px',
         fontFamily: FONT_STACK[annotation.fontFamily ?? 'sans'],
-        lineHeight: (annotation.fontSize * 1.25 * scale) + 'px',
-        whiteSpace: 'pre',
+        lineHeight: (annotation.fontSize * LINE_HEIGHT * scale) + 'px',
+        // A box with a wrap width wraps as it is typed, at exactly the width
+        // the canvas will wrap it at; one without stays the single growing line
+        // it has always been.
+        whiteSpace: wrapped ? 'pre-wrap' : 'pre',
+        width: wrapped ? annotation.wrapWidth! * scale + 'px' : undefined,
         background: 'transparent',
         border: 'none',
         outline: '1px dashed #ea580c',
@@ -3735,8 +3843,9 @@ function TextEditor({
         padding: 0,
         margin: 0,
         boxSizing: 'content-box',
-        minWidth: '120px',
-        height: annotation.fontSize * 1.25 * scale + 'px',
+        minWidth: wrapped ? undefined : '120px',
+        minHeight: annotation.fontSize * LINE_HEIGHT * scale + 'px',
+        height: wrapped ? undefined : annotation.fontSize * LINE_HEIGHT * scale + 'px',
         zIndex: 10
       }}
     />

@@ -3,7 +3,7 @@ import type { Annotation, RedactAnnotation, SignatureFieldAnnotation } from '../
 import type { FormFieldValue } from '../stores/formStore'
 import { hexToPdfRgb } from './colors'
 import { fontBase, type PdfBaseFont } from './fonts'
-import { effectiveRuns } from './textRuns'
+import { LINE_HEIGHT, layoutText } from './textLayout'
 import { pdfjsLib, type PDFDocumentProxy } from './pdfjs'
 import { redactFillHex } from './redactGate'
 import { saveBlob } from './saveFile'
@@ -271,63 +271,72 @@ export async function buildAnnotatedPdfBytes(
           // Draw each styled run in sequence, advancing x by the run's own
           // (variant-specific) width so mixed bold/italic/underline/link within
           // one text box bake correctly.
-          let offset = 0 // canvas-space advance from a.x
-          for (const run of effectiveRuns(a)) {
-            const body = sanitizeForWinAnsi(run.text)
-            const font = await pickFont(fontBase(a.fontFamily), run.bold, run.italic)
-            const runW = body ? font.widthOfTextAtSize(body, a.fontSize) : 0
-            if (body) {
-              const rx = a.x + offset
-              const blKy = a.y + a.fontSize * 0.8
-              const [bx, by] = rotatePoint(rx, blKy, a.x, a.y, rad)
-              page.drawText(body, {
-                x: sx(bx),
-                y: toY(by),
-                size: sw(a.fontSize),
-                font,
-                color: hexToPdfRgb(a.color),
-                rotate: rot ? degrees(-rot) : undefined
-              })
-              // pdf-lib has no underline; a link also shows as an underline (its
-              // colour is deliberately left as the text colour). Draw the rule
-              // just below the baseline, rotated with the text.
-              if (run.underline || run.link) {
-                const uy = a.y + a.fontSize * 0.98
-                const [ux1, uy1] = rotatePoint(rx, uy, a.x, a.y, rad)
-                const [ux2, uy2] = rotatePoint(rx + runW, uy, a.x, a.y, rad)
-                page.drawLine({
-                  start: { x: sx(ux1), y: toY(uy1) },
-                  end: { x: sx(ux2), y: toY(uy2) },
-                  thickness: sw(Math.max(0.75, a.fontSize * 0.06)),
-                  color: hexToPdfRgb(a.color)
+          //
+          // ⚠️ WHERE the lines break is decided by the shared canvas layout, not
+          // re-derived here from pdf-lib's metrics: the two measure slightly
+          // differently, and a file whose words wrapped somewhere other than
+          // the editor showed them would be the bug. Only the advance WITHIN a
+          // line uses the embedded font's own widths, as it always has.
+          for (const [li, line] of layoutText(a).entries()) {
+            const lineY = a.y + li * a.fontSize * LINE_HEIGHT
+            let offset = 0 // canvas-space advance from a.x
+            for (const run of line.runs) {
+              const body = sanitizeForWinAnsi(run.text)
+              const font = await pickFont(fontBase(a.fontFamily), run.bold, run.italic)
+              const runW = body ? font.widthOfTextAtSize(body, a.fontSize) : 0
+              if (body) {
+                const rx = a.x + offset
+                const blKy = lineY + a.fontSize * 0.8
+                const [bx, by] = rotatePoint(rx, blKy, a.x, a.y, rad)
+                page.drawText(body, {
+                  x: sx(bx),
+                  y: toY(by),
+                  size: sw(a.fontSize),
+                  font,
+                  color: hexToPdfRgb(a.color),
+                  rotate: rot ? degrees(-rot) : undefined
                 })
-              }
-              // Bake a clickable URI link annotation over just this run's box.
-              // The rect is axis-aligned (run rotation of the hit area is
-              // dropped — acceptable for a link target).
-              if (run.link) {
-                const lx1 = sx(rx)
-                const lx2 = sx(rx + runW)
-                const ly1 = toY(a.y + a.fontSize * 1.2)
-                const ly2 = toY(a.y)
-                const linkAnnot = pdf.context.obj({
-                  Type: 'Annot',
-                  Subtype: 'Link',
-                  Rect: [lx1, ly1, lx2, ly2],
-                  Border: [0, 0, 0],
-                  A: pdf.context.obj({
-                    Type: 'Action',
-                    S: 'URI',
-                    URI: PDFString.of(run.link)
+                // pdf-lib has no underline; a link also shows as an underline (its
+                // colour is deliberately left as the text colour). Draw the rule
+                // just below the baseline, rotated with the text.
+                if (run.underline || run.link) {
+                  const uy = lineY + a.fontSize * 0.98
+                  const [ux1, uy1] = rotatePoint(rx, uy, a.x, a.y, rad)
+                  const [ux2, uy2] = rotatePoint(rx + runW, uy, a.x, a.y, rad)
+                  page.drawLine({
+                    start: { x: sx(ux1), y: toY(uy1) },
+                    end: { x: sx(ux2), y: toY(uy2) },
+                    thickness: sw(Math.max(0.75, a.fontSize * 0.06)),
+                    color: hexToPdfRgb(a.color)
                   })
-                })
-                const ref = pdf.context.register(linkAnnot)
-                const existing = page.node.lookup(PDFName.of('Annots'), PDFArray)
-                if (existing) existing.push(ref)
-                else page.node.set(PDFName.of('Annots'), pdf.context.obj([ref]))
+                }
+                // Bake a clickable URI link annotation over just this run's box.
+                // The rect is axis-aligned (run rotation of the hit area is
+                // dropped — acceptable for a link target).
+                if (run.link) {
+                  const lx1 = sx(rx)
+                  const lx2 = sx(rx + runW)
+                  const ly1 = toY(lineY + a.fontSize * 1.2)
+                  const ly2 = toY(lineY)
+                  const linkAnnot = pdf.context.obj({
+                    Type: 'Annot',
+                    Subtype: 'Link',
+                    Rect: [lx1, ly1, lx2, ly2],
+                    Border: [0, 0, 0],
+                    A: pdf.context.obj({
+                      Type: 'Action',
+                      S: 'URI',
+                      URI: PDFString.of(run.link)
+                    })
+                  })
+                  const ref = pdf.context.register(linkAnnot)
+                  const existing = page.node.lookup(PDFName.of('Annots'), PDFArray)
+                  if (existing) existing.push(ref)
+                  else page.node.set(PDFName.of('Annots'), pdf.context.obj([ref]))
+                }
               }
+              offset += runW
             }
-            offset += runW
           }
           break
         }

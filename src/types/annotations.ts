@@ -49,6 +49,11 @@ export type TextAnnotation = Base & {
   fontSize: number
   fontFamily?: FontFamily
   rotation?: number
+  // Width (in the same model/point space as x/y) the text wraps to, set by
+  // dragging a side handle on the box. Absent means "no box" — the text is one
+  // line as wide as it needs to be, which is how every text placed before
+  // resizing existed still behaves. See lib/textLayout.ts.
+  wrapWidth?: number
   // Whole-annotation style fallback, used when `runs` is absent (legacy text,
   // or text with a single uniform style). The pill toggles these when the box
   // is selected but not being edited.

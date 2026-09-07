@@ -115,7 +115,16 @@ const shapes = () =>
     for (const stage of K.stages) {
       const s = stage.scaleX() || 1
       const r = (n) => Math.round(n * s * 100) / 100
-      const idOf = (n) => n.id() || (n.getParent() && n.getParent().id ? n.getParent().id() : '')
+      const idOf = (n) => {
+        // Walk ALL the way up, not one level: a text annotation's runs sit
+        // inside an inner group (the one a resize counter-scales), so the id is
+        // two parents away, and a single hop silently finds no text at all.
+        for (let p = n; p; p = p.getParent()) {
+          const id = p.id ? p.id() : ''
+          if (id) return id
+        }
+        return ''
+      }
       for (const node of stage.find('Shape')) {
         if (!idOf(node)) continue
         const cls = node.getClassName()
