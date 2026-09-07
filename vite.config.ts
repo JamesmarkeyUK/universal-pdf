@@ -23,7 +23,11 @@ import { checkBuildEnv, buildEnvError } from './scripts/buildEnv.ts'
 // <meta name="build-sha"> tag and a startup console.log so the live build is
 // identifiable in-browser without wrangler.
 function resolveBuildSha(): string {
-  if (process.env.CF_PAGES_COMMIT_SHA) return process.env.CF_PAGES_COMMIT_SHA
+  // ⚠️ Truncated to the same 7 characters the local fallback below produces.
+  // Cloudflare hands over the FULL 40-character SHA, so the same commit used to
+  // stamp two different markers depending on where it was built — and the marker
+  // exists precisely to be compared against `git log` by eye.
+  if (process.env.CF_PAGES_COMMIT_SHA) return process.env.CF_PAGES_COMMIT_SHA.slice(0, 7)
   try {
     return execSync('git rev-parse --short HEAD').toString().trim()
   } catch {
