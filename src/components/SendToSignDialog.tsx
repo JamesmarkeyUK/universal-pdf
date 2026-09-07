@@ -33,7 +33,12 @@ const STATUS_UI: Record<string, { label: string; cls: string }> = {
 }
 
 const HUB_LOGIN_URL = 'https://app.unisim.co.uk/login'
-const GET_TOKENS_URL = 'https://www.unisim.co.uk/subscription.html'
+// Was /subscription.html until 2026-09-07, when the marketing site split its
+// one pricing page in two. The token card moved to /everyday; /subscription is
+// now the Assess Suite's seats and licences and sells no tokens at all — so a
+// link left pointing there sends someone who wants one upload to a £5,000/year
+// enterprise plan. Not a 404: it renders fine, which is why it needed finding.
+const GET_TOKENS_URL = 'https://www.unisim.co.uk/everyday'
 
 // Export → "Send to sign": store the current PDF online (one token — the free
 // app token first, returned when the stored file is deleted), mint a
