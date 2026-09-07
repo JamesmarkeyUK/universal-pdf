@@ -524,6 +524,105 @@ reasons invisible from the screen, and a plain selection offered exactly one
 visible outcome: delete. It still only calls `setTool('select')` when a tool was
 actually armed; with Select active there is nothing to go back to.
 
+## Text boxes: the size pill, the handles, and where the lines break
+
+A text annotation is the only annotation whose *content* has a layout, and since
+2026-09-07 (`cfdc9ed`) that layout is computed in one place and used by three
+surfaces.
+
+### The size pill shows the SELECTED box's size, and commits absolutely
+
+The number in the floating pill is the size of the text you have selected,
+converted to display pixels (it knows the zoom), and setting it writes that size
+onto the annotation **absolutely**. It used to show the store's global
+`fontSize` — the size the *next* text will be placed at — which matches the
+selection only in the moment just after you place it, and drifts from it
+silently ever after.
+
+Two store actions, and they are not interchangeable:
+
+    setFontSize(s)          relative nudge; ALSO rewrites the selected annotation
+    setDefaultFontSize(s)   remember it for the NEXT text; touches nothing selected
+
+The pill uses `setDefaultFontSize` after it has written the selection's own size,
+so choosing 24 for this box also makes the next box 24 without the pill having to
+round-trip through a relative nudge.
+
+⚠️ **The +/− buttons must live inside `FontSizeStepper`, with the field.** The
+pill preventDefaults its own `mousedown` — deliberately, so B / I / U can style a
+**live selection** without focus leaving the document — and that also means
+clicking any button in the pill never **blurs** the number field. With the
+buttons outside it, the field's draft went stale the moment you pressed +, and
+the blur that finally arrived when you **grabbed the box to drag it** committed
+that stale number back over the new size. Reported, accurately, as *"when you
+drag it, it snaps back to the smaller size"*: the drag fires it, a click three
+actions earlier causes it, and there is nothing wrong with the drag code. The
+buttons now step from the field's own draft, so the stale value cannot exist.
+Do not "fix" a recurrence with a staleness guard — move the control inside the
+field that owns the draft.
+
+### Resizing: corners scale the type, sides set a `wrapWidth`
+
+`'text'` is in `isResizable`, and `anchorsFor()` gives a text box the four
+corners plus `middle-left` / `middle-right`.
+
+- **Corners** are `keepRatio` — they scale the font. Both scales arrive equal,
+  so the new `fontSize` comes straight off one of them.
+- **Sides** write `wrapWidth` (model/point space, same as `x`/`y`), so dragging
+  the right handle leftwards re-flows the words onto more lines.
+
+`wrapWidth` is **optional**, and absent means "no box — one line, as wide as it
+needs to be". That is how every text placed before this existed still behaves, so
+never default it to a number.
+
+During a side drag the inner run group is counter-scaled (`1 / scaleX`) so the
+letters re-flow crisply at the new width instead of stretching; the committed
+`wrapWidth` is written **once**, on `transformend`, and the whole drag is a
+single undo step.
+
+### `lib/textLayout.ts` is the one layout, shared with the export
+
+`layoutText(a)` decides where the lines break, once, using canvas `measureText`
+in unscaled model space — the same measurement Konva itself uses, so the wrap
+points, the per-run advance and the editor all agree.
+
+⚠️ **`lib/export.ts` imports it rather than re-deriving the breaks from
+pdf-lib's font metrics.** The two metric sources do not agree to the pixel, so
+re-deriving would wrap the *saved file* somewhere other than the screen did — and
+nothing on screen would ever show it, because the on-screen box would still look
+perfect. The failure would surface only in a file already sent to someone.
+Export still advances *within* a line with pdf-lib's own metrics; it is the break
+points that are borrowed. The contentEditable editor overlay takes the same width
+and the same `LINE_HEIGHT` (1.25), so typing wraps where the canvas does.
+
+**Word wrap only.** A word wider than the box overflows rather than being broken
+mid-word, matching what the editor overlay does natively — make the canvas break
+mid-word and the canvas and the editor disagree the moment you start typing.
+
+### ⚠️ The runs sit one Group deeper than every other annotation's shapes
+
+The counter-scaling above needs an inner group (`TEXT_RUNS_GROUP`, named
+`'text-runs'`), so a text annotation's run nodes are **two** parents below the
+node carrying the annotation id, where every other annotation's are one.
+
+This does not throw. A one-hop lookup lands on the inner group, gets `''`, and
+the caller skips the node as "not an annotation" — so a harness enumerating the
+page reports **no text on it at all**: a clean, green-looking, entirely wrong
+answer. `e2e/shape-tap.e2e.mjs` hit exactly this; its `idOf` now walks up until
+it finds an id, and anything else reaching an annotation id from a Konva shape
+needs the same. A fixed-depth parent hop is a latent bug in any tree the renderer
+may add a wrapper to.
+
+### Testing it
+
+`npm run test:text-resize` (`e2e/text-box-resize.e2e.mjs`) — 18 checks against
+the **dev server**, not a static build: the last block imports the app's own
+`/src/lib/export.ts` to bake a wrapped box into a real PDF and reads the
+baselines back with pdf.js. It pins the pill, the drag that used to snap the size
+back, both handle kinds, the wrap, and that round trip. Three negative controls
+are recorded in the file's header and were run — each turns only its own checks
+red.
+
 ## The desktop drawing panel is two rows, on purpose
 
 `ToolbarDesktopTools`'s `openPanel === 'draw'` `FloatingPanel` is an explicit
