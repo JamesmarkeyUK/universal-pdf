@@ -179,6 +179,28 @@ const TAP_LINE_LENGTH_PX = 140
 const TAP_RECT_SIZE_PX = { width: 180, height: 120 }
 const TAP_CIRCLE_SIZE_PX = 140
 
+// How long a finger must sit still on the page before the Select-area tool
+// takes the gesture over and starts drawing its box.
+//
+// ⚠️ WHY A HOLD AT ALL. Select area needs a one-finger drag; so does scrolling
+// through the document, and a page can only give that gesture to one of them.
+// It used to be given to the box outright (`touch-action: none` on the Stage),
+// which meant that picking Select area on a phone froze the document: every
+// swipe drew an empty box instead of scrolling, an empty sweep leaves the tool
+// armed for another try, and so there was no way to reach page 4 — or to get
+// out — short of going back to the toolbar and choosing a different tool. That
+// is the same mistake the one-shot placement tools made (see `dragDrawTool`
+// below), and it has the same shape of answer: hand the plain swipe back to
+// the document and ask for something a swipe is not.
+//
+// A press-and-hold is that something, and it is what a phone already means by
+// "start selecting" everywhere else. 350ms is the usual platform long-press
+// (Android's is 400ms, iOS's ~500ms for menus but shorter for drag) — long
+// enough that the start of a flick never trips it, short enough not to feel
+// stuck. A hold that has fired is announced on the page (`marqueeAnchor`), so
+// the gesture is not invisible while it waits.
+const MARQUEE_HOLD_MS = 350
+
 // ⚠️ Redact is deliberately NOT in this list. It carries the same "a tap gets
 // thrown away" guard, but a solid black block appearing at a guessed size over
 // text is not the harmless default a box outline is — James named Line, Circle
@@ -748,8 +770,9 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   // the "text is still readable, redact instead?" warning dialog.
   const [fillWarnId, setFillWarnId] = useState<string | null>(null)
   const [fillWarnDontShow, setFillWarnDontShow] = useState(false)
-  // Rubber-band selection rectangle (mouse/pen only — see onPointerDown). Held
-  // in unscaled page coordinates and rendered as a dashed box while dragging.
+  // Rubber-band selection rectangle. Held in unscaled page coordinates and
+  // rendered as a dashed box while dragging. Started immediately by a
+  // mouse/pen drag; a FINGER has to press and hold first (see marqueeHoldRef).
   const marqueeRef = useRef<{
     startX: number
     startY: number
@@ -758,6 +781,22 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
     moved: boolean
   } | null>(null)
   const [marquee, setMarquee] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null)
+  // A finger down on the page with the Select-area tool, waiting to find out
+  // whether it is a swipe (scroll the document) or a press-and-hold (draw the
+  // box). See MARQUEE_HOLD_MS and the touchmove listener below for why the
+  // gesture has to be won this way rather than reserved up front.
+  const marqueeHoldRef = useRef<{
+    timer: ReturnType<typeof setTimeout>
+    pointerId: number
+    clientX: number
+    clientY: number
+  } | null>(null)
+  // True once a hold has fired and this layer owns the finger. Read by the
+  // native touchmove listener, which must answer synchronously.
+  const marqueeTouchRef = useRef(false)
+  // Same fact as a render trigger: it draws the anchor marker that tells the
+  // user the hold landed and the box is now following their finger.
+  const [marqueeAnchor, setMarqueeAnchor] = useState<{ x: number; y: number } | null>(null)
   // While dragging a multi-selection, the dragged node's last position so we
   // can apply the same delta to every other selected node each frame.
   const groupDragLast = useRef<{ x: number; y: number } | null>(null)
@@ -835,6 +874,16 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   const pageW = width / scale
   const pageH = height / scale
 
+  // Drop a Select-area hold that never became a box: the finger travelled (so
+  // it was a swipe and the document is already scrolling under it), lifted, or
+  // was taken away. Safe to call when there is no hold.
+  function clearMarqueeHold() {
+    if (marqueeHoldRef.current) clearTimeout(marqueeHoldRef.current.timer)
+    marqueeHoldRef.current = null
+    marqueeTouchRef.current = false
+    setMarqueeAnchor(null)
+  }
+
   // Abandon every gesture in flight on this page and put anything mid-drag back
   // where it started. A pinch is a zoom and only a zoom, so the drag / stroke /
   // rubber-band the first finger began is discarded rather than half-committed.
@@ -846,6 +895,7 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
     setCurrentLine(null)
     marqueeRef.current = null
     setMarquee(null)
+    clearMarqueeHold()
     setLineDrag(null)
     groupDragLast.current = null
     // Tell the dragend handlers (Konva fires them from stopDrag, and line
@@ -884,6 +934,47 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
     // pinch edge is what we want.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pinching])
+
+  // Winning the swipe back once a Select-area hold has fired.
+  //
+  // `touch-action` is read once, when the finger lands, so it cannot be flipped
+  // to 'none' at the moment the hold fires — by then the browser has already
+  // decided this gesture is allowed to scroll. What it has NOT done is start
+  // scrolling: the finger hasn't moved. A touchmove stays cancelable right up
+  // until the scroll actually begins, so preventDefault on the first move after
+  // the hold takes the gesture, and every move after it stays ours.
+  //
+  // It has to be a native, non-passive listener — React attaches its touch
+  // handlers passively, so preventDefault from a JSX onTouchMove does nothing.
+  //
+  // ⚠️ A NON-cancelable move means the browser has already handed the gesture
+  // to the scroller and we cannot have it back. Abandon the box rather than
+  // draw one over a page that is sliding underneath it: the gesture then reads
+  // as the scroll it became, which is what every other tool would have done.
+  useEffect(() => {
+    const container = stageRef.current?.container()
+    if (!container) return
+    function onTouchMove(e: TouchEvent) {
+      if (!marqueeTouchRef.current) return
+      if (e.cancelable) e.preventDefault()
+      else cancelGesture()
+    }
+    container.addEventListener('touchmove', onTouchMove, { passive: false })
+    return () => container.removeEventListener('touchmove', onTouchMove)
+    // The listener reads a ref and calls a stable-enough handler; it wants to
+    // live exactly as long as the Stage's container does.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // A hold counting down when the tool changes (or the page unmounts as it
+  // scrolls out) must not fire into a tool that no longer wants a box.
+  useEffect(() => {
+    return () => {
+      if (marqueeHoldRef.current) clearTimeout(marqueeHoldRef.current.timer)
+      marqueeHoldRef.current = null
+      marqueeTouchRef.current = false
+    }
+  }, [tool])
 
   function onPointerDown(e: Konva.KonvaEventObject<PointerEvent>) {
     activePointerIds.current.add(e.evt.pointerId)
@@ -950,14 +1041,39 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
         return
       }
     }
-    // Rubber-band (marquee) selection. Always available with the dedicated
-    // marquee tool — touch included — since that tool reserves the gesture
-    // (touchAction: none). With the plain Select tool it's a mouse/pen-only
-    // shortcut so finger panning on mobile is never hijacked.
+    // Rubber-band (marquee) selection. With the plain Select tool it's a
+    // mouse/pen-only shortcut so finger panning on mobile is never hijacked.
     const canMarquee =
       tool === 'marquee' || (tool === 'select' && e.evt.pointerType !== 'touch')
     if (canMarquee) {
       const p = getPos(e)
+      // A finger doesn't get the box for free — the document's swipe comes
+      // first, and the box only takes over once the finger has proved it isn't
+      // one by staying put for MARQUEE_HOLD_MS. Mouse and pen have a scroll
+      // wheel and no such conflict, so they start drawing straight away.
+      //
+      // ⚠️ Gated on `coarsePointer` as well as the pointer type, so it stays in
+      // step with `touchAction` below — the two have to agree about which
+      // devices this tool hands the swipe back to. On a touch-capable LAPTOP
+      // (a fine primary pointer) the Stage still reserves the gesture and a
+      // finger still draws the box on contact, exactly as it did before.
+      if (coarsePointer && e.evt.pointerType === 'touch') {
+        clearMarqueeHold()
+        const { pointerId, clientX, clientY } = e.evt
+        marqueeHoldRef.current = {
+          pointerId,
+          clientX,
+          clientY,
+          timer: setTimeout(() => {
+            marqueeHoldRef.current = null
+            marqueeTouchRef.current = true
+            marqueeRef.current = { startX: p.x, startY: p.y, curX: p.x, curY: p.y, moved: false }
+            setMarquee({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
+            setMarqueeAnchor({ x: p.x, y: p.y })
+          }, MARQUEE_HOLD_MS)
+        }
+        return
+      }
       marqueeRef.current = { startX: p.x, startY: p.y, curX: p.x, curY: p.y, moved: false }
       setMarquee({ x1: p.x, y1: p.y, x2: p.x, y2: p.y })
       return
@@ -1154,6 +1270,14 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
       // Travelled too far to be a tap — this is a scroll or a drag. Disarm.
       if (Math.hypot(dx, dy) > TAP_SLOP_PX) pendingTapRef.current = null
     }
+    // A Select-area finger that moves before the hold fires is a swipe: give up
+    // on the box and leave the scroll the browser has already started alone.
+    const hold = marqueeHoldRef.current
+    if (hold && hold.pointerId === e.evt.pointerId) {
+      const dx = e.evt.clientX - hold.clientX
+      const dy = e.evt.clientY - hold.clientY
+      if (Math.hypot(dx, dy) > TAP_SLOP_PX) clearMarqueeHold()
+    }
     const pos = getPos(e)
     if (marqueeRef.current) {
       const m = marqueeRef.current
@@ -1211,6 +1335,14 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
       commitTapPlacement({ x: tap.x, y: tap.y })
       return
     }
+    // A Select-area finger that lifted before the hold fired: a tap on empty
+    // page, which means the same thing here as a marquee that never moved.
+    if (marqueeHoldRef.current) {
+      clearMarqueeHold()
+      setSelected(null)
+      return
+    }
+    clearMarqueeHold()
     if (marqueeRef.current) {
       const m = marqueeRef.current
       marqueeRef.current = null
@@ -1843,9 +1975,19 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   // bought nothing and cost everything: with Text active the page could not be
   // scrolled at all, and the swipe that tried left a stray text box behind.
   // Only the tools that genuinely draw through a drag keep 'none'.
+  //
+  // ⚠️ SELECT AREA IS ON THE PANNING SIDE ON TOUCH, and it is the exception
+  // that proves that rule rather than a hole in it. It does genuinely draw
+  // through a drag — but unlike the drawing tools, a reader reaches for it in
+  // the middle of a document they still need to move around, and reserving the
+  // gesture left them unable to move it at all (see MARQUEE_HOLD_MS). So on a
+  // finger it keeps `pan-y pinch-zoom` and wins the gesture back per-gesture,
+  // with a press-and-hold, instead of taking it for the whole tool. A mouse or
+  // a pen has no such conflict, so on a fine pointer it stays reserved.
   const dragDrawTool =
     tool === 'draw' || tool === 'highlight' || tool === 'rect' || tool === 'ellipse' ||
-    tool === 'redact' || tool === 'line' || tool === 'sigfield' || tool === 'marquee'
+    tool === 'redact' || tool === 'line' || tool === 'sigfield' ||
+    (tool === 'marquee' && !coarsePointer)
   const touchAction = dragDrawTool ? 'none' : 'pan-y pinch-zoom'
 
   // Mirrors the drop sizing above (cap included) so the ghost under the cursor
@@ -2265,6 +2407,25 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
               />
             )
           })()}
+
+          {/* The hold landed and the box is now following the finger — said on
+              the page, because until the finger moves the marquee above is a
+              zero-sized rectangle and a press-and-hold that produced no visible
+              answer is indistinguishable from one that missed. Sized in display
+              pixels (÷ scale) so it stays a fingertip at every zoom. */}
+          {marqueeAnchor && (
+            <Ellipse
+              listening={false}
+              x={marqueeAnchor.x}
+              y={marqueeAnchor.y}
+              radiusX={9 / scale}
+              radiusY={9 / scale}
+              fill="#ea580c"
+              opacity={0.25}
+              stroke="#ea580c"
+              strokeWidth={1.5 / scale}
+            />
+          )}
 
           {(() => {
             const single = !isMulti && selectedOnPage.length === 1 ? selectedOnPage[0] : null

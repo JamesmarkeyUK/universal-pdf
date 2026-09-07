@@ -5,6 +5,7 @@ import { usePdfStore } from '../../stores/pdfStore'
 import SignatureMenu from '../Signature/SignatureMenu'
 import ExportModal from '../Export/ExportModal'
 import { FONT_DEFS } from '../../lib/fonts'
+import { useCoarsePointer } from '../../hooks/useCoarsePointer'
 import type { Annotation, Tool } from '../../types/annotations'
 
 // The always-visible core fonts; the rest (FONT_DEFS) are revealed by the "+"
@@ -210,9 +211,30 @@ function FloatingPanel({
   )
 }
 
-const SELECT_OPTIONS: { id: Tool; icon: string; label: string; help: string }[] = [
+// `touchHelp` replaces `help` on a touchscreen, and `gesture` is the same fact
+// short enough for the mobile panel's buttons. They exist for exactly one
+// reason: Select area is drawn with a different gesture there. A finger's plain
+// drag belongs to the document — that is how a reader reaches page 4 — so the
+// box is started by pressing and holding first (see MARQUEE_HOLD_MS in
+// AnnotationLayer). A gesture nobody is told about is a gesture nobody finds,
+// and this list is the one place a reader looks at the tool before picking it.
+const SELECT_OPTIONS: {
+  id: Tool
+  icon: string
+  label: string
+  help: string
+  touchHelp?: string
+  gesture?: string
+}[] = [
   { id: 'select', icon: '↖', label: 'Select', help: 'Click to move, resize or edit. On desktop, drag empty space to select many' },
-  { id: 'marquee', icon: '⛶', label: 'Select area', help: 'Drag a box to select many edits, then move/resize/rotate them together' },
+  {
+    id: 'marquee',
+    icon: '⛶',
+    label: 'Select area',
+    help: 'Drag a box to select many edits, then move/resize/rotate them together',
+    touchHelp: 'Press and hold, then drag a box to select many edits — a plain swipe still scrolls the document',
+    gesture: 'hold, then drag'
+  },
   { id: 'selecttext', icon: '⌶', label: 'Select text', help: "Drag over the PDF's own text to select it, then copy (Ctrl/⌘C)" },
   { id: 'hand', icon: '✋', label: 'Hand', help: 'Drag to pan around the PDF without selecting' }
 ]
@@ -332,6 +354,9 @@ const isDrawShape = (t: Tool) => t === 'tick' || t === 'cross' || t === 'line' |
 
 // --- DESKTOP TOOLS (left, inline in header) -------------------------------
 export function ToolbarDesktopTools() {
+  // A tablet gets this toolbar at lg+ but drives it with a finger, so the
+  // help text has to name the gesture the reader actually has.
+  const coarsePointer = useCoarsePointer()
   const tool = useAnnotationStore((s) => s.tool)
   const color = useAnnotationStore((s) => s.color)
   const strokeWidth = useAnnotationStore((s) => s.strokeWidth)
@@ -545,7 +570,9 @@ export function ToolbarDesktopTools() {
                 <span className="text-lg leading-none w-5 text-center">{opt.icon}</span>
                 <div className="flex-1 min-w-0">
                   <div className="font-medium">{opt.label}</div>
-                  <div className="text-[11px] opacity-70">{opt.help}</div>
+                  <div className="text-[11px] opacity-70">
+                    {(coarsePointer && opt.touchHelp) || opt.help}
+                  </div>
                 </div>
               </button>
             ))}
@@ -775,6 +802,10 @@ export function ToolbarDesktopActions() {
 
 // --- MOBILE TOOLBAR (bottom, fixed) --------------------------------------
 export function ToolbarMobile() {
+  // Only a touchscreen needs to be told about the press-and-hold; this toolbar
+  // also shows on a narrow DESKTOP window, where a mouse drags the box on
+  // contact as it always has.
+  const coarsePointer = useCoarsePointer()
   const tool = useAnnotationStore((s) => s.tool)
   const color = useAnnotationStore((s) => s.color)
   const strokeWidth = useAnnotationStore((s) => s.strokeWidth)
@@ -883,7 +914,19 @@ export function ToolbarMobile() {
               }`}
             >
               <span className="text-lg leading-none">{opt.icon}</span>
-              <span>{opt.label}</span>
+              <span className="flex flex-col items-start leading-tight">
+                <span>{opt.label}</span>
+                {/* The one tool whose gesture differs on glass says so here.
+                    There is no room for the full help text in this row, and no
+                    banner for it either (PlacementHint is for armed payloads,
+                    not tools) — so three words at the moment of choosing is
+                    the whole budget, and it is enough. */}
+                {coarsePointer && opt.gesture && (
+                  <span className={`text-[10px] font-normal ${tool === opt.id ? 'text-orange-100' : 'text-slate-500'}`}>
+                    {opt.gesture}
+                  </span>
+                )}
+              </span>
             </button>
           ))}
         </div>

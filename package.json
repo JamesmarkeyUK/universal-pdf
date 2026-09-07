@@ -47,6 +47,7 @@
     "test:link-click": "node e2e/link-click.e2e.mjs",
     "test:line-tap": "node e2e/line-tap.e2e.mjs",
     "test:shape-tap": "node e2e/shape-tap.e2e.mjs",
+    "test:select-area": "node e2e/select-area-touch.e2e.mjs",
     "test:lock-password": "node --experimental-strip-types scripts/lockPassword.test.mjs",
     "test:sign-access": "node --experimental-strip-types scripts/signAccessSecret.test.mjs",
     "test:encrypt": "node --experimental-strip-types --import ./scripts/ts-resolve.mjs scripts/pdfEncrypt.test.mjs",
