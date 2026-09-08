@@ -3,7 +3,7 @@
   "version": "0.6.20",
   "private": true,
   "type": "module",
-  "license": "MIT",
+  "license": "AGPL-3.0-or-later",
   "author": {
     "name": "Universal Simulation Ltd",
     "email": "inbox@unisim.co.uk"

@@ -205,4 +205,4 @@ Issues and pull requests welcome. The project is intentionally small and depende
 
 ## License
 
-[MIT](./LICENSE).
+[AGPL-3.0-or-later](./LICENSE), with an added permission for app-store distribution.
