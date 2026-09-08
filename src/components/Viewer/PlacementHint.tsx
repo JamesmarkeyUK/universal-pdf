@@ -1,32 +1,25 @@
-import { useState } from 'react'
+import { useUserPrefs } from '@unisim/sdk'
 import { useAnnotationStore } from '../../stores/annotationStore'
 import { useSignatureStore } from '../../stores/signatureStore'
 import { useCoarsePointer } from '../../hooks/useCoarsePointer'
 
-// "Don't show again" is PERMANENT and has no way back, matching the ruling on
+// "Don't show again" is PERMANENT and stays that way, matching the ruling on
 // the mobile welcome coach-mark (James, 2026-09-01: a prompt that reappears
 // after you have read it "is not onboarding, it is a nag"). Cancel is the other
 // button and means something else entirely — abandon the armed placement — so
 // the two are never collapsed into one.
-const DISMISSED_KEY = 'universal-pdf-placement-hint-dismissed'
-
-function isDismissed(): boolean {
-  try {
-    return localStorage.getItem(DISMISSED_KEY) === '1'
-  } catch {
-    // Private mode / blocked site data. Showing the card is the safe answer:
-    // the state it describes is otherwise invisible.
-    return false
-  }
-}
-
-function persistDismissed() {
-  try {
-    localStorage.setItem(DISMISSED_KEY, '1')
-  } catch {
-    /* ignore — it stays hidden for this session either way */
-  }
-}
+//
+// ✅ It now FOLLOWS A SIGNED-IN USER BETWEEN DEVICES (James, 2026-09-08), via
+// the SDK's `useUserPrefs` and the `user_app_prefs` row behind it. Dismissing
+// on a laptop used to say nothing to the same person's phone. Signed out it
+// behaves exactly as before — a local flag, no requests — which is most
+// visitors, since this app needs no account.
+//
+// ⚠️ And it now has a way BACK: Actions → Advanced → Reset defaults. That is
+// what makes "permanent" defensible rather than a trap; without it an
+// accidental tap on the button set a preference the user could not see or
+// undo. The two changes belong together and should not be separated.
+export const PLACEMENT_HINT_DISMISSED = 'placementHintDismissed'
 
 // The banner that says a placement is ARMED and waiting for a tap.
 //
@@ -81,9 +74,14 @@ const EXTRA_NOUN: Record<'name' | 'details' | 'date', string> = {
 }
 
 export default function PlacementHint() {
-  // Read once on mount: nothing else in the app writes this key, so there is
-  // no state to keep in step with.
-  const [dismissed, setDismissed] = useState(isDismissed)
+  // ⚠️ Not read once on mount any more. `useUserPrefs` answers from
+  // localStorage synchronously (so there is no flash on a device that has
+  // already dismissed it) and then merges the remote row when it arrives — so
+  // a first launch on a NEW device may show the card briefly before the sync
+  // lands. That is the honest trade: the alternative is holding the card back
+  // behind a round-trip on every launch, which would flash it for everyone.
+  const { pref, setPref } = useUserPrefs()
+  const dismissed = pref(PLACEMENT_HINT_DISMISSED, false)
   const tool = useAnnotationStore((s) => s.tool)
   const uploadedImageSrc = useAnnotationStore((s) => s.uploadedImageSrc)
   const uploadedImageQr = useAnnotationStore((s) => s.uploadedImageQr)
@@ -224,7 +222,7 @@ export default function PlacementHint() {
           </button>
           <button
             type="button"
-            onClick={() => { persistDismissed(); setDismissed(true) }}
+            onClick={() => setPref(PLACEMENT_HINT_DISMISSED, true)}
             // Hides the card and leaves the placement ARMED — it is a display
             // preference, not a way out of the state. Cancel is the way out.
             className="rounded-full bg-white/80 px-3 py-1.5 text-[13px] font-medium text-slate-500 shadow-sm hover:bg-white hover:text-slate-700"

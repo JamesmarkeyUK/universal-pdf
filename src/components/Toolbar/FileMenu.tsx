@@ -4,6 +4,7 @@ import { useAnnotationStore } from '../../stores/annotationStore'
 import { usePdfStore } from '../../stores/pdfStore'
 import { useExitGuard } from '../../stores/exitGuard'
 import { useSearchStore } from '../../stores/searchStore'
+import { useUserPrefs } from '@unisim/sdk'
 import { LANGS, persistLang, readSavedLang, type LangCode } from '../../lib/lang'
 import { OfficeImportError, PDF_OR_OFFICE_ACCEPT, toViewablePdf } from '../../lib/officeToPdf'
 import { RedactIcon } from '../icons/RedactIcon'
@@ -169,6 +170,11 @@ export default function FileMenu({ variant = 'toolbar' }: Props) {
   const isXfa = usePdfStore((s) => s.isXfa)
   const setSearchOpen = useSearchStore((s) => s.setOpen)
   const openForRedact = useSearchStore((s) => s.openForRedact)
+  // Reset defaults (Advanced). `reset` clears the local copy AND, for a
+  // signed-in user, the synced row — so a hint dismissed on another device
+  // comes back too, which is the whole point of it being synced.
+  const { reset: resetPrefs } = useUserPrefs()
+  const [resetDone, setResetDone] = useState(false)
 
   const canClear = annotations.length > 0
   const canRename = !!doc && !!fileName
@@ -709,6 +715,33 @@ export default function FileMenu({ variant = 'toolbar' }: Props) {
                     label="About this app"
                     info="What it does, what it never sends, and which build you are on."
                     onSelect={() => { setAboutOpen(true); closeMenu() }}
+                  />
+                  {/* Reset defaults — the way back from "Don't show again"
+                      (James, 2026-09-08).
+
+                      ⚠️ This row is what makes a PERMANENT dismissal defensible.
+                      Before it existed, tapping "Don't show again" set a
+                      preference the user could neither see nor undo, and the
+                      only cure was clearing site data. Do not remove it
+                      without also making that button non-permanent.
+
+                      It is deliberately NOT a confirm: it restores hints, it
+                      does not delete anything a user made, and a confirm on a
+                      harmless action teaches people to click through confirms
+                      on harmful ones. The label says what comes back. */}
+                  <InfoRow
+                    icon="↺"
+                    label={resetDone ? 'Defaults restored' : 'Reset defaults'}
+                    info="Bring back the tips you dismissed with “Don’t show again”. Your documents are untouched."
+                    onSelect={() => {
+                      void resetPrefs().then(() => {
+                        setResetDone(true)
+                        // Left open on purpose: the label changing to
+                        // "Defaults restored" IS the feedback, and closing the
+                        // menu would hide it.
+                        window.setTimeout(() => setResetDone(false), 2500)
+                      })
+                    }}
                   />
                 </div>
               )}
