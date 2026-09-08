@@ -4,6 +4,7 @@ import { useAnnotationStore } from '../../stores/annotationStore'
 import { usePdfStore } from '../../stores/pdfStore'
 import { useExitGuard } from '../../stores/exitGuard'
 import { useSearchStore } from '../../stores/searchStore'
+import { useUndo } from '../../hooks/useUndo'
 import { useUserPrefs } from '@unisim/sdk'
 import { LANGS, persistLang, readSavedLang, type LangCode } from '../../lib/lang'
 import { OfficeImportError, PDF_OR_OFFICE_ACCEPT, toViewablePdf } from '../../lib/officeToPdf'
@@ -143,10 +144,9 @@ function InfoRow({
 
 export default function FileMenu({ variant = 'toolbar' }: Props) {
   const annotations = useAnnotationStore((s) => s.annotations)
-  const undo = useAnnotationStore((s) => s.undo)
-  const redo = useAnnotationStore((s) => s.redo)
-  const canUndo = useAnnotationStore((s) => s.past.length > 0)
-  const canRedo = useAnnotationStore((s) => s.future.length > 0)
+  // Undo covers whole-document steps (merge, convert, page changes, metadata)
+  // as well as annotations — see hooks/useUndo.
+  const { canUndo, undo, canRedo, redo, nextDocumentUndo } = useUndo()
   const clearAll = useAnnotationStore((s) => s.clearAll)
   const setTool = useAnnotationStore((s) => s.setTool)
   const setColor = useAnnotationStore((s) => s.setColor)
@@ -696,7 +696,7 @@ export default function FileMenu({ variant = 'toolbar' }: Props) {
                     <InfoRow
                       icon="🔒"
                       label="Advanced export"
-                      info="Flatten the pages into pictures, lock it with a password, or both."
+                      info="Flatten the pages into pictures, lock it with a password, keep or strip the metadata."
                       onSelect={() => { setAdvancedExportOpen(true); closeMenu() }}
                     />
                   )}
@@ -818,7 +818,13 @@ export default function FileMenu({ variant = 'toolbar' }: Props) {
                     className="w-full flex items-center gap-3 pl-8 pr-3 py-2.5 text-sm text-slate-700 hover:bg-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     <span aria-hidden="true">↶</span>
-                    <span className="flex-1 text-left">Undo</span>
+                    <span className="flex-1 text-left">
+                      {/* Named when it is about to take back something big. A
+                          row that just says "Undo" gives no way to tell
+                          "un-draw that box" from "put the whole pre-merge
+                          document back". */}
+                      {nextDocumentUndo ? `Undo ${nextDocumentUndo}` : 'Undo'}
+                    </span>
                     <span className="text-[11px] text-slate-400 tracking-wide">Ctrl+Z</span>
                   </button>
                   <button
