@@ -28,7 +28,7 @@ import { usePreviewPane } from '../../hooks/usePreviewPane'
 import { CONTAINER } from '../../lib/layout'
 
 // Balanced is the default when compressing — 'light' is lossless but usually
-// barely shrinks, so people expect the "1 Click Compress" default to actually
+// barely shrinks, so people expect the "Compress PDF(s)" default to actually
 // make the file smaller. Stronger/lighter are still one tap away in the modal.
 const DEFAULT_COMPRESS_QUALITY: CompressQuality = 'balanced'
 
@@ -256,7 +256,7 @@ export default function LandingPage() {
   async function onCompressFile(e: React.ChangeEvent<HTMLInputElement>) {
     // ⚠️ `input.files` is a LIVE FileList, not a snapshot. Clearing `value` (so
     // the same file can be re-picked) empties the very list you are holding —
-    // so reading `files.length` afterwards gave 0 and "1 Click Compress" did
+    // so reading `files.length` afterwards gave 0 and "Compress PDF(s)" did
     // nothing at all when you picked a file through the browser (dropping one
     // still worked, which is why it went unnoticed). Materialise first.
     const files = Array.from(e.target.files ?? [])
@@ -484,7 +484,7 @@ export default function LandingPage() {
                   ? compressProgress || 'Compressing…'
                   : dragOverCompress
                     ? 'Drop to compress'
-                    : '1 Click Compress — drop one or many'}
+                    : 'Compress PDF(s)'}
               </button>
 
               {/* The chevron IS the "Advanced options" label now: a square

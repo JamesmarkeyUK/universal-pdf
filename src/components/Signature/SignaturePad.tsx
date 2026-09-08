@@ -769,8 +769,8 @@ export default function SignaturePad() {
                     </button>
                   </div>
                   <p className="mt-1 text-xs text-slate-400">
-                    “Separate click” keeps the image ink-only and drops each line — name, details, date —
-                    on a click of its own, so every one can go in a form’s own field.
+                    “Separate click” places each line on a click of its own, so
+                    every one can go in a form’s own field.
                   </p>
                 </div>
               </div>

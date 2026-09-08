@@ -715,7 +715,7 @@ why the typed **REDACT** gate exists (see
 **Three doors, one tool.** Actions → Redact → *Free draw*; Actions → Redact →
 *Find and redact* (search, then box every match); and the landing page's
 **"Redact text — make portions unreadable to humans and machines"**, under the
-chevron beside *1 Click Compress*. The landing door opens the PDF **and arms the
+chevron beside *Compress PDF(s)*. The landing door opens the PDF **and arms the
 tool** — `LandingPage.onRedactFile` waits on `openFiles()`, which returns whether
 a document actually opened, so a failed load can't leave the tool armed over
 nothing.

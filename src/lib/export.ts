@@ -889,7 +889,7 @@ export async function compressPdf(
   const bytes = await out.save({ useObjectStreams: true })
   // ⚠️ Rasterising is only a win when there is something raster-shaped to win.
   // A text-only PDF turns 7 KB of glyphs into ~860 KB of JPEG — 100× bigger,
-  // with the text no longer selectable. "1 Click Compress" must never hand back
+  // with the text no longer selectable. "Compress PDF(s)" must never hand back
   // a bigger file than it was given, so the lossless pass is the yardstick and
   // whichever is smaller wins. Same document either way; only the bytes differ.
   //
