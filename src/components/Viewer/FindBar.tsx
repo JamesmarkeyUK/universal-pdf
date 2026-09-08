@@ -52,6 +52,11 @@ export default function FindBar() {
   useEffect(() => {
     let cancelled = false
     const q = query
+    // A new search is a new decision: the "are you sure" state must not carry
+    // over from the last one. It matters more now that the whole Redact-all
+    // block is hidden at exactly one match — editing the query down to one and
+    // back up would otherwise land straight in the confirmation.
+    setConfirmingAll(false)
     if (!q.trim()) {
       setMatches([])
       return
@@ -252,8 +257,15 @@ export default function FindBar() {
                 </span>
               </span>
             </button>
-            {/* Then: redact every match at once and close. */}
-            {confirmingAll ? (
+            {/* Then: redact every match at once and close.
+                ⚠️ NOT OFFERED WHEN THERE IS EXACTLY ONE MATCH (James,
+                2026-09-08: "if there's only one match don't show the all match
+                option (it's also just one)") — "Redact all 1 match" is the same
+                command as the button above it, dressed as a bigger decision,
+                and it asks for a confirmation to do it. Still shown at zero
+                matches, where it is disabled and its job is to say the option
+                exists. */}
+            {count !== 1 && (confirmingAll ? (
               <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
                 <p className="text-[11px] text-amber-800 leading-snug">
                   <strong>Double-check before proceeding.</strong> Automatic search may miss some instances — different spellings, formatting, or scanned text won't be caught. Please review the document manually after redacting.
@@ -292,7 +304,7 @@ export default function FindBar() {
                   </span>
                 </span>
               </button>
-            )}
+            ))}
           </div>
         </div>
       )}

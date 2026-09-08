@@ -6,6 +6,7 @@ import SignatureMenu from '../Signature/SignatureMenu'
 import ExportModal from '../Export/ExportModal'
 import { FONT_DEFS } from '../../lib/fonts'
 import { useCoarsePointer } from '../../hooks/useCoarsePointer'
+import { useUndo } from '../../hooks/useUndo'
 import type { Annotation, Tool } from '../../types/annotations'
 
 // The always-visible core fonts; the rest (FONT_DEFS) are revealed by the "+"
@@ -261,8 +262,9 @@ let clipboardAnnotation: Annotation | null = null
 export function useToolbarKeyboardShortcuts(enabled: boolean) {
   const selectedId = useAnnotationStore((s) => s.selectedId)
   const selectedIds = useAnnotationStore((s) => s.selectedIds)
-  const undo = useAnnotationStore((s) => s.undo)
-  const redo = useAnnotationStore((s) => s.redo)
+  // Ctrl+Z reaches the whole-document steps too — the same undo the menu row
+  // and the phone toolbar button run.
+  const { undo, redo } = useUndo()
   const remove = useAnnotationStore((s) => s.remove)
   const removeMany = useAnnotationStore((s) => s.removeMany)
   const add = useAnnotationStore((s) => s.add)
@@ -365,7 +367,6 @@ export function ToolbarDesktopTools() {
   const setColor = useAnnotationStore((s) => s.setColor)
   const setStrokeWidth = useAnnotationStore((s) => s.setStrokeWidth)
   const setSelected = useAnnotationStore((s) => s.setSelected)
-  const remove = useAnnotationStore((s) => s.remove)
   const fontSize = useAnnotationStore((s) => s.fontSize)
   const setFontSize = useAnnotationStore((s) => s.setFontSize)
   const fontFamily = useAnnotationStore((s) => s.fontFamily)
@@ -763,16 +764,14 @@ export function ToolbarDesktopTools() {
           control in this cluster does; Export ends the document. */}
       <SignatureMenu />
 
-      {/* Delete (only when an annotation is selected) */}
-      {selectedId && (
-        <button
-          onClick={() => remove(selectedId)}
-          title="Delete selected (Del)"
-          className="ml-1 px-3 h-9 rounded bg-red-600 hover:bg-red-500 text-sm font-medium"
-        >
-          Delete
-        </button>
-      )}
+      {/* No Delete button here. It used to appear in this row whenever
+          something was selected, and it is the same command as the bin that
+          floats off the selected object's own top-right corner (see
+          AnnotationLayer) — which arrived later, sits where the user is already
+          looking, and comes paired with Confirm. Two buttons for one action, in
+          two places, with the toolbar one the further from the thing it acts
+          on. Del / Backspace still work, and still handle a multi-selection,
+          which neither button ever did. (James, 2026-09-08.) */}
     </div>
   )
 }
@@ -814,8 +813,7 @@ export function ToolbarMobile() {
   const setColor = useAnnotationStore((s) => s.setColor)
   const setStrokeWidth = useAnnotationStore((s) => s.setStrokeWidth)
   const setSelected = useAnnotationStore((s) => s.setSelected)
-  const undo = useAnnotationStore((s) => s.undo)
-  const canUndo = useAnnotationStore((s) => s.past.length > 0)
+  const { canUndo, undo } = useUndo()
   const fontSize = useAnnotationStore((s) => s.fontSize)
   const setFontSize = useAnnotationStore((s) => s.setFontSize)
   const fontFamily = useAnnotationStore((s) => s.fontFamily)

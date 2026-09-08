@@ -195,6 +195,57 @@ const MARQUEE_HOLD_MS = 350
 // text is not the harmless default a box outline is — James named Line, Circle
 // and Rectangle, and redaction was left to be asked about.
 
+// The caption every redaction box wears, and where it goes.
+//
+// INSIDE the block when there is room for it, ABOVE the block when there is not
+// (James, 2026-09-08: "after search and redact it should also show the 'this
+// will be redacted...' on top"). Find and redact draws its boxes the width of
+// the matched word — a name, a number — which is nowhere near the ~118pt the
+// caption needs, so every box the app drew for you used to be the one kind with
+// no caption at all. That is exactly backwards: a box you drew yourself, you
+// know the meaning of; a dozen boxes that appeared across the document after a
+// search are the ones that have to say what they are.
+//
+// Why it matters at all: a black rectangle is indistinguishable from a filled
+// shape, and the difference is the whole point — one hides pixels, the other
+// deletes the text underneath on export.
+const REDACT_HINT_TEXT = 'This will be redacted on export'
+
+function redactHintGeom(
+  box: { x: number; y: number; width: number; height: number },
+  pale: boolean
+) {
+  if (box.width >= 118 && box.height >= 14) {
+    return {
+      x: box.x + 4,
+      y: box.y,
+      width: Math.max(0, box.width - 8),
+      height: box.height,
+      fontSize: Math.min(11, box.height * 0.5),
+      fill: pale ? '#475569' : '#ffffff',
+      align: 'center' as const,
+      verticalAlign: 'middle' as const
+    }
+  }
+  const fontSize = 10
+  // Above the box — unless the box is at the very top of the page, where there
+  // is nothing above it to write on and the caption goes underneath instead.
+  const above = box.y >= fontSize + 3
+  return {
+    x: box.x,
+    y: above ? box.y - fontSize - 3 : box.y + box.height + 3,
+    width: REDACT_HINT_TEXT.length * fontSize * 0.55,
+    height: fontSize + 2,
+    fontSize,
+    // Out on the page rather than on the block, so it takes a colour that reads
+    // against paper whatever the block is filled with — and a warning red,
+    // because out here it is a note about something not yet done.
+    fill: '#b91c1c',
+    align: 'left' as const,
+    verticalAlign: 'top' as const
+  }
+}
+
 function fitPlacement(
   w: number,
   h: number,
@@ -390,6 +441,45 @@ function SignatureGhost({
       y={y}
       width={width}
       height={height}
+    />
+  )
+}
+
+// The picture twin of SignatureGhost — a QR code or an uploaded image
+// following the cursor while the image tool is armed.
+//
+// It sizes itself rather than being told, because a signature knows its own
+// dimensions (the pad measured them) and an armed picture does not: all the
+// layer holds is a `src`. So the fit runs in here, off the loaded image's
+// natural size, using the same numbers as the drop in `onPointerDown` — what
+// you see under the cursor is what lands.
+function ImageGhost({
+  src,
+  x,
+  y,
+  scale,
+  pageW,
+  pageH
+}: {
+  src: string
+  x: number
+  y: number
+  scale: number
+  pageW: number
+  pageH: number
+}) {
+  const img = useImage(src)
+  if (!img) return null
+  const ratio = img.naturalHeight / img.naturalWidth
+  const fit = fitPlacement(200 / scale, (200 / scale) * ratio, pageW, pageH)
+  return (
+    <KonvaImage
+      listening={false}
+      image={img}
+      x={x - fit.width / 2}
+      y={y - fit.height / 2}
+      width={fit.width}
+      height={fit.height}
     />
   )
 }
@@ -697,6 +787,10 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   const setStrokeWidth = useAnnotationStore((s) => s.setStrokeWidth)
   const setColor = useAnnotationStore((s) => s.setColor)
   const setDefaultFontSize = useAnnotationStore((s) => s.setDefaultFontSize)
+  // Armed picture — an upload or a generated QR — read reactively rather than
+  // off `getState()` like the drop does, because the ghost has to re-render as
+  // soon as one is armed, not on the click that places it.
+  const uploadedImageSrc = useAnnotationStore((s) => s.uploadedImageSrc)
 
   // Width a text box is being dragged to, while a side handle is down. Held
   // here rather than in the store so a drag doesn't leave a hundred undo steps
@@ -1310,7 +1404,7 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
       setMarquee({ x1: m.startX, y1: m.startY, x2: pos.x, y2: pos.y })
       return
     }
-    if (tool === 'signature' && activeSignature) {
+    if ((tool === 'signature' && activeSignature) || (tool === 'image' && uploadedImageSrc)) {
       setHoverPos({ x: pos.x, y: pos.y })
     } else if (hoverPos) {
       setHoverPos(null)
@@ -1539,15 +1633,25 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
     }
   }
 
-  // Keep in step with the caption's props in the `redact` render branch — this
-  // is the same geometry applied by hand.
-  function placeRedactHint(id: string, box: { x: number; y: number; width: number; height: number }) {
-    const hint = redactHintRefs.current.get(id)
-    if (!hint) return
-    hint.position({ x: box.x + 4, y: box.y })
-    hint.width(Math.max(0, box.width - 8))
-    hint.height(box.height)
-    hint.fontSize(Math.min(11, box.height * 0.5))
+  // Keep in step with the caption's props in the `redact` render branch — the
+  // same geometry, applied by hand. Both sides go through `redactHintGeom`, so
+  // a box resized past the point where the caption fits inside it flips to the
+  // outside position mid-gesture rather than at the end of one.
+  function placeRedactHint(
+    id: string,
+    box: { x: number; y: number; width: number; height: number },
+    pale: boolean
+  ) {
+    const node = redactHintRefs.current.get(id)
+    if (!node) return
+    const g = redactHintGeom(box, pale)
+    node.position({ x: g.x, y: g.y })
+    node.width(g.width)
+    node.height(g.height)
+    node.fontSize(g.fontSize)
+    node.fill(g.fill)
+    node.align(g.align)
+    node.verticalAlign(g.verticalAlign)
   }
 
   // Put a node back where the model says it belongs after a cancelled gesture,
@@ -1556,19 +1660,28 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
   // skips them — leaving it stranded wherever the abandoned drag pushed it.
   function restoreNodeHome(node: Konva.Node, a: Annotation) {
     node.position(nodeHomePosition(a))
-    if (a.type === 'redact') placeRedactHint(a.id, a)
+    if (a.type === 'redact') placeRedactHint(a.id, a, isPaleFill(redactFillHex(a.fill)))
   }
 
   // Live geometry of a shape mid-gesture: a drag moves x/y and leaves the size
   // alone; a Transformer resize leaves width/height alone and scales instead
   // (onShapeTransformEnd bakes the scale back into the stored size at the end).
   function syncRedactHint(id: string, node: Konva.Node) {
-    placeRedactHint(id, {
-      x: node.x(),
-      y: node.y(),
-      width: node.width() * node.scaleX(),
-      height: node.height() * node.scaleY()
-    })
+    // The fill decides the caption's colour when it sits INSIDE the block, so
+    // it has to be looked up rather than passed: the group-drag path below
+    // moves other members of a selection by id, with no annotation in hand.
+    const a = annotations.find((x) => x.id === id)
+    const pale = a?.type === 'redact' ? isPaleFill(redactFillHex(a.fill)) : false
+    placeRedactHint(
+      id,
+      {
+        x: node.x(),
+        y: node.y(),
+        width: node.width() * node.scaleX(),
+        height: node.height() * node.scaleY()
+      },
+      pale
+    )
   }
 
   function onShapeClick(id: string, e?: Konva.KonvaEventObject<MouseEvent | TouchEvent>) {
@@ -2247,7 +2360,7 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                 // A sibling rather than a Group wrapping both: `common` carries
                 // the Transformer ref, and the resize handler reads width() /
                 // height() off that node — a Group reports neither.
-                const hint = a.width >= 118 && a.height >= 14
+                const hint = redactHintGeom(a, pale)
                 return (
                   <Fragment key={a.id}>
                     <Rect
@@ -2267,25 +2380,23 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                       stroke={pale ? '#94a3b8' : undefined}
                       strokeWidth={pale ? 1 : 0}
                     />
-                    {hint && (
-                      <Text
-                        ref={redactHintRefSetter(a.id)}
-                        listening={false}
-                        x={a.x + 4}
-                        y={a.y}
-                        width={a.width - 8}
-                        height={a.height}
-                        text="This will be redacted on export"
-                        fontSize={Math.min(11, a.height * 0.5)}
-                        fontFamily={FONT_STACK.sans}
-                        fill={pale ? '#475569' : '#ffffff'}
-                        opacity={0.85}
-                        align="center"
-                        verticalAlign="middle"
-                        wrap="none"
-                        ellipsis
-                      />
-                    )}
+                    <Text
+                      ref={redactHintRefSetter(a.id)}
+                      listening={false}
+                      x={hint.x}
+                      y={hint.y}
+                      width={hint.width}
+                      height={hint.height}
+                      text={REDACT_HINT_TEXT}
+                      fontSize={hint.fontSize}
+                      fontFamily={FONT_STACK.sans}
+                      fill={hint.fill}
+                      opacity={0.85}
+                      align={hint.align}
+                      verticalAlign={hint.verticalAlign}
+                      wrap="none"
+                      ellipsis
+                    />
                   </Fragment>
                 )
               }
@@ -2463,6 +2574,20 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
               y={hoverPos.y - ghostSigHeight / 2}
               width={ghostSigWidth}
               height={ghostSigHeight}
+            />
+          )}
+
+          {/* Same preview for a picture waiting to be placed — an uploaded
+              image or a QR code, which arm the same tool and land the same
+              way, so they get the same ghost. */}
+          {tool === 'image' && uploadedImageSrc && hoverPos && (
+            <ImageGhost
+              src={uploadedImageSrc}
+              x={hoverPos.x}
+              y={hoverPos.y}
+              scale={scale}
+              pageW={pageW}
+              pageH={pageH}
             />
           )}
 
@@ -3060,6 +3185,56 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
             >
               Snap {lineSnap ? 'On' : 'Off'}
             </button>
+          </div>
+        )
+      })()}
+
+      {(() => {
+        // Contextual COLOUR pill for the other drawn objects — tick, cross,
+        // box, circle and a freehand stroke (James, 2026-09-08: "on the various
+        // draw items like the X and tick should have the same colour options as
+        // the text once they've been placed").
+        //
+        // Text and lines already had a pill; everything else drawn had none, so
+        // recolouring a ✗ that had landed in the wrong colour meant knowing
+        // that a toolbar swatch repaints the current selection — which nothing
+        // on screen says. Same ColorCluster as the other two pills, so the
+        // answer is in the same place whatever is selected.
+        //
+        // Colour only, deliberately. It is what was asked for, and the pill has
+        // to stay small enough to sit under a tick without covering the page;
+        // the line pill next door carries stroke width as well because a line
+        // is very nearly nothing but its stroke.
+        if (draggingId || editingId) return null
+        const selected = annotations.find((a) => a.id === selectedId)
+        if (!selected) return null
+        const drawn =
+          selected.type === 'tick' ||
+          selected.type === 'cross' ||
+          selected.type === 'rect' ||
+          selected.type === 'ellipse' ||
+          (selected.type === 'draw' && !isLine(selected))
+        if (!drawn) return null
+        const bbox = getAnnotationBBox(selected)
+        return (
+          <div
+            onMouseDown={(e) => e.stopPropagation()}
+            style={{
+              position: 'absolute',
+              left: bbox.x * scale,
+              top: (bbox.y + bbox.height) * scale + 10,
+              zIndex: 21
+            }}
+            className="inline-flex items-center gap-2 bg-white rounded-full shadow-lg border border-slate-300 pl-3 pr-2 py-1.5 whitespace-nowrap"
+          >
+            <span className="text-xs text-slate-500 font-medium">Colour</span>
+            {/* ⚠️ The SELECTED object's colour, not the store's current default
+                — the two drift apart the moment you select something you drew
+                earlier, and a pill showing the wrong swatch as active is worse
+                than no pill. `setColor` is still the store action, which
+                repaints this object and sets the default for the next one in
+                one history step. */}
+            <ColorCluster color={selected.color} setColor={setColor} />
           </div>
         )
       })()}

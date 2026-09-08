@@ -112,8 +112,49 @@ const anyBanner = page.locator('[role="status"] button:has-text("Cancel")').firs
 const bannerText = async () =>
   (await anyBanner.count()) ? (await anyBanner.locator('xpath=../..').innerText()).replace(/\s+/g, ' ').trim() : ''
 
+// ⚠️ READ THE PREFERENCE THE WAY THE APP WRITES IT. It used to be a
+// localStorage flag of this app's own; since 2026-09-08 it is a synced user
+// pref (`@unisim/sdk`'s userPrefs), whose local mirror is one JSON blob under
+// `unisim:prefs:<app>`. The old key is never written any more, so the two
+// assertions that read it went red without anything being broken — a test
+// telling the truth about a key nobody uses.
+async function dismissedInPrefs() {
+  return page.evaluate(() => {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (!k || !k.startsWith('unisim:prefs:')) continue
+      try {
+        if (JSON.parse(localStorage.getItem(k) || '{}').placementHintDismissed === true) return true
+      } catch {
+        /* not ours */
+      }
+    }
+    return false
+  })
+}
+
 const pageCanvas = page.locator('[data-page-index="0"] canvas').first()
 const pageBox = await pageCanvas.boundingBox()
+
+// ── Start from defaults ─────────────────────────────────────────────────────
+// ⚠️ THIS TEST DISMISSES THE CARD FOR GOOD, and since 2026-09-08 that
+// preference is SYNCED to the account rather than kept in this browser. So a
+// run leaves the next one starting with the card already off, and "a card is up
+// again" fails — on a second run of a suite that passed the first time, with
+// nothing in the app broken. Reset defaults (Actions ▸ Advanced) is the app's
+// own way back, and clearing localStorage would not do: the synced value would
+// simply come back down.
+await page.hover('button[aria-label$="Profile"]')
+await page.waitForTimeout(400)
+const advanced = page.locator('button:visible').filter({ hasText: 'Advanced' }).first()
+if ((await advanced.getAttribute('aria-expanded')) !== 'true') {
+  await advanced.click()
+  await page.waitForTimeout(300)
+}
+await page.locator('button:visible').filter({ hasText: 'Reset defaults' }).first().click()
+await page.waitForTimeout(1200)
+await page.keyboard.press('Escape')
+await page.waitForTimeout(300)
 
 // ── Nothing armed, nothing said ─────────────────────────────────────────────
 console.log('\nthe banner only exists while something is armed')
@@ -268,7 +309,7 @@ await page.waitForTimeout(400)
 check('the card goes', (await anyBanner.count()) === 0)
 check(
   'and the choice is remembered',
-  await page.evaluate(() => localStorage.getItem('universal-pdf-placement-hint-dismissed') === '1'),
+  await dismissedInPrefs(),
 )
 
 const before = await page.evaluate(() => {
@@ -288,7 +329,7 @@ await page.reload({ waitUntil: 'load' })
 await page.waitForTimeout(500)
 check(
   'and it is still off after a reload',
-  await page.evaluate(() => localStorage.getItem('universal-pdf-placement-hint-dismissed') === '1'),
+  await dismissedInPrefs(),
 )
 
 await browser.close()

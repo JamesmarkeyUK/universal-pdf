@@ -30,8 +30,9 @@ export const PLACEMENT_HINT_DISMISSED = 'placementHintDismissed'
 // no visible difference from the one before it: a tool is armed and the very
 // next tap on the page drops something. The only feedback was the cursor-
 // following ghost in AnnotationLayer — which needs a HOVER, so on a phone there
-// was no feedback at all, and even on desktop only the signature had one (an
-// armed QR / picture had none on any device).
+// was no feedback at all, and on desktop only the signature had one until an
+// armed QR / picture got the same preview (2026-09-08). This card is still the
+// whole of the feedback on touch, where there is no cursor to follow.
 //
 // It is deliberately not a toast: it must stay up for exactly as long as the
 // state it describes, and go the instant the thing lands. Nothing is timed.
