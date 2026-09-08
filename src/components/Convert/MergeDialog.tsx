@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { mergePdfs } from '../../lib/convert'
 import { downloadPdfBytes } from '../../lib/export'
 import { usePdfStore } from '../../stores/pdfStore'
+import { useExitGuard } from '../../stores/exitGuard'
 
 interface Props {
   onClose: () => void
@@ -35,6 +36,8 @@ export default function MergeDialog({ onClose, initialFile }: Props) {
   const [dragOver, setDragOver] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const loadFile = usePdfStore((s) => s.loadFile)
+  const snapshotDocument = usePdfStore((s) => s.snapshotDocument)
+  const requestExit = useExitGuard((s) => s.requestExit)
 
   function addFiles(fileList: FileList | File[]) {
     const pdfs = Array.from(fileList).filter(
@@ -92,8 +95,18 @@ export default function MergeDialog({ onClose, initialFile }: Props) {
       const file = new File([bytes.slice() as BlobPart], 'merged.pdf', {
         type: 'application/pdf'
       })
-      await loadFile(file)
-      onClose()
+      // ⚠️ THROUGH THE EXIT GUARD, because opening the merged file over the top
+      // of an annotated document throws that annotation layer away — the same
+      // loss the guard already covers for Close and Open-another, arrived at by
+      // a route that never asked. It runs straight through when there is
+      // nothing unsaved, so a plain merge is still one click.
+      requestExit('merge', async () => {
+        // Before the load, and paired with `keepDocUndo` so the step survives
+        // it: this is what makes Undo able to put the old document back.
+        snapshotDocument('merge')
+        await loadFile(file, { keepDocUndo: true })
+        onClose()
+      })
     } catch (err) {
       console.error(err)
       alert('Merge failed: ' + (err as Error).message)

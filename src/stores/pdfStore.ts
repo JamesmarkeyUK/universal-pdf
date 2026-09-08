@@ -12,6 +12,8 @@ import { useSignatureStore } from './signatureStore'
 import { markSaved, noteStructuralEdit } from '../lib/unsavedChanges'
 import { rememberOpenFolder } from '../lib/openFolder'
 import type { QrPlacement } from '../lib/qr/design'
+import type { Annotation } from '../types/annotations'
+import type { FormFieldValue } from './formStore'
 
 // Restore a recent's saved edits into the live stores. Applies whenever the
 // stored arrays EXIST (even when empty) so a deliberately-cleared document
@@ -132,7 +134,22 @@ interface PdfState {
   // long as somebody is hunting for their password.
   lockedFile: { file: File; notice?: string; error: string | null } | null
   cancelLockedFile: () => void
-  loadFile: (file: File, options?: { notice?: string; password?: string }) => Promise<void>
+  loadFile: (
+    file: File,
+    options?: {
+      notice?: string
+      password?: string
+      /**
+       * Keep the whole-document undo stack across this load. Set ONLY by the
+       * operations that transform the open document into this one — merge and
+       * convert — which take their snapshot first and then arrive here. Every
+       * other load is a different document, and inherits an empty stack:
+       * undoing a merge onto a file you have since closed is the bug the
+       * annotation history avoids by clearing on load.
+       */
+      keepDocUndo?: boolean
+    }
+  ) => Promise<void>
   loadFromSlug: (slug: string) => Promise<boolean>
   loadFromCurrentUrl: () => Promise<boolean>
   reset: () => void
@@ -160,6 +177,58 @@ interface PdfState {
   applyPageOrder: (newOrder: number[]) => Promise<void>
   deletePage: (pageIndex: number) => Promise<void>
   movePage: (from: number, to: number) => Promise<void>
+  // Whole-document undo. See DocSnapshot.
+  docUndo: DocSnapshot[]
+  snapshotDocument: (label: string) => void
+  undoDocument: () => Promise<void>
+}
+
+/**
+ * The open document, and the editing state belonging to it, as it was just
+ * before something replaced or rewrote the whole thing.
+ *
+ * ⚠️ WHY THIS EXISTS SEPARATELY FROM THE ANNOTATION HISTORY (James, 2026-09-08:
+ * "I had annotations and then used the merge option thinking it would keep my
+ * annotations but it destroyed them", and "allow the undo option to undo things
+ * like merge too"). Ctrl+Z walks `annotationStore.past`, which is a list of
+ * annotation arrays for ONE set of bytes. A merge, a convert, a page delete or
+ * a metadata scrub replaces the bytes — and `resetDocument` then empties that
+ * history precisely so a stroke drawn on the old document cannot be undone back
+ * onto the new one. Correct, and it leaves the biggest change in the app as the
+ * only one nothing can take back.
+ *
+ * So document-level changes get their own stack, and undo falls through to it
+ * when the annotation history is empty — which, after any of these operations,
+ * is exactly the state it is in.
+ */
+interface DocSnapshot {
+  /** What was about to happen, for the wording of anything that offers it. */
+  label: string
+  fileName: string
+  bytes: ArrayBuffer
+  annotations: Annotation[]
+  formValues: FormFieldValue[]
+}
+
+// How many document-level steps are kept, and how many bytes they may hold
+// between them.
+//
+// ⚠️ Bounded by BYTES, not just by count. Every entry pins a whole PDF in
+// memory — merge a dozen scans and a count-only cap would hold hundreds of
+// megabytes of documents nobody is looking at any more. The newest snapshot is
+// always kept even if it alone busts the budget: an undo that silently does not
+// exist because the file was big is worse than the memory.
+const MAX_DOC_UNDO = 5
+const MAX_DOC_UNDO_BYTES = 150 * 1024 * 1024
+
+function trimDocUndo(stack: DocSnapshot[]): DocSnapshot[] {
+  let next = stack.length > MAX_DOC_UNDO ? stack.slice(-MAX_DOC_UNDO) : stack
+  let total = next.reduce((n, s) => n + s.bytes.byteLength, 0)
+  while (next.length > 1 && total > MAX_DOC_UNDO_BYTES) {
+    total -= next[0].bytes.byteLength
+    next = next.slice(1)
+  }
+  return next
 }
 
 // How long the "page 1 is drawing" hold may last before the viewer is shown
@@ -194,6 +263,7 @@ export const usePdfStore = create<PdfState>((set, get) => ({
   qrOpen: false,
   qrEdit: null,
   recents: [],
+  docUndo: [],
   importNotice: null,
   dismissImportNotice: () => set({ importNotice: null }),
   lockedFile: null,
@@ -215,10 +285,72 @@ export const usePdfStore = create<PdfState>((set, get) => ({
   // again would come back up still pointed at the annotation it last wrote to.
   setQrOpen: (qrOpen) => set({ qrOpen, qrEdit: null }),
   openQrEditor: (id, placement) => set({ qrOpen: true, qrEdit: { id, placement } }),
+  // Remember the whole document as it stands, so whatever is about to replace
+  // it can be taken back. A no-op with nothing open — there is no state worth
+  // returning to, and an empty snapshot would light up the Undo button.
+  snapshotDocument: (label) => {
+    const { sourceBytes, fileName } = get()
+    if (!sourceBytes || !fileName) return
+    set((s) => ({
+      docUndo: trimDocUndo([
+        ...s.docUndo,
+        {
+          label,
+          fileName,
+          // ⚠️ Copied. `sourceBytes` is handed to pdf.js and to pdf-lib, both of
+          // which may take ownership of the buffer; a snapshot sharing it would
+          // come back detached.
+          bytes: sourceBytes.slice(),
+          annotations: useAnnotationStore.getState().annotations,
+          formValues: useFormStore.getState().values
+        }
+      ])
+    }))
+  },
+
+  undoDocument: async () => {
+    const stack = get().docUndo
+    const snap = stack[stack.length - 1]
+    if (!snap) return
+    // Built first, swapped after — the same atomic shape as every other
+    // document rewrite here. A failed load must leave what is on screen alone
+    // rather than half-replacing it.
+    const doc = await loadPdf(snap.bytes.slice()).promise
+    get().doc?.destroy()
+    set({
+      doc,
+      numPages: doc.numPages,
+      isXfa: doc.isPureXfa,
+      sourceBytes: snap.bytes,
+      fileName: snap.fileName,
+      docUndo: stack.slice(0, -1)
+    })
+    // ⚠️ The annotations come back WITH their bytes. Restoring one without the
+    // other is what made the merge destructive in the first place.
+    useAnnotationStore.setState({
+      annotations: snap.annotations,
+      selectedId: null,
+      selectedIds: [],
+      past: [],
+      future: []
+    })
+    useFormStore.setState({ values: snap.formValues })
+    useSearchStore.getState().reset()
+    noteStructuralEdit()
+
+    saveRecent(snap.fileName, snap.bytes)
+      .then((slug) => {
+        if (slug) setHashSlug(slug)
+        return get().refreshRecents()
+      })
+      .catch(() => {})
+  },
+
   scrubMetadata: async () => {
     const bytes = get().sourceBytes
     const fileName = get().fileName
     if (!bytes || !fileName) return
+    get().snapshotDocument('strip metadata')
 
     // Same atomic shape as applyPageOrder: build the replacement document
     // first, and only swap state once it has loaded. Annotations and form
@@ -302,7 +434,8 @@ export const usePdfStore = create<PdfState>((set, get) => ({
         // Always assigned, never merged: opening a PDF normally has to clear a
         // notice left over from the converted document before it.
         importNotice: options?.notice ?? null,
-        lockedFile: null
+        lockedFile: null,
+        ...(options?.keepDocUndo ? {} : { docUndo: [] })
       })
       // Desktop only: the folder this document came off the disk from, which is
       // where the Save dialog will start rather than ~/Downloads. Said here,
@@ -391,7 +524,10 @@ export const usePdfStore = create<PdfState>((set, get) => ({
     // Nothing is open, so nothing is unsaved. Re-baselining here is also what
     // keeps the structural-edit counter in step across documents.
     markSaved()
-    set({ doc: null, numPages: 0, fileName: null, sourceBytes: null, isXfa: false, firstPaint: true, previewOpen: false, presentOpen: false, ocrOpen: false, mergeOpen: false, convertOpen: false, advancedExportOpen: false, metadataOpen: false, qrOpen: false, qrEdit: null, importNotice: null, lockedFile: null })
+    // ⚠️ `docUndo` goes with it. Undoing a merge back onto a document that is
+    // no longer open would be the same bug the annotation history avoids by
+    // clearing on load.
+    set({ doc: null, numPages: 0, fileName: null, sourceBytes: null, isXfa: false, firstPaint: true, previewOpen: false, presentOpen: false, ocrOpen: false, mergeOpen: false, convertOpen: false, advancedExportOpen: false, metadataOpen: false, qrOpen: false, qrEdit: null, importNotice: null, lockedFile: null, docUndo: [] })
     setHashSlug(null)
   },
   refreshRecents: async () => {
@@ -434,6 +570,11 @@ export const usePdfStore = create<PdfState>((set, get) => ({
     const isNoop =
       newOrder.length === current && newOrder.every((idx, i) => idx === i)
     if (isNoop) return
+
+    // After the no-op test, so reordering back to where you started does not
+    // push a step that undoes to the same thing. deletePage / movePage come
+    // through here too, so this one call covers all three.
+    get().snapshotDocument('page change')
 
     const newBytes = await applyPageOrderToPdf(bytes, newOrder)
     const indexMap = buildPageIndexMap(newOrder)

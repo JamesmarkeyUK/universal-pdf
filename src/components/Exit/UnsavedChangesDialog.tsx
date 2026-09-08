@@ -18,6 +18,12 @@ import { RedactIcon } from '../icons/RedactIcon'
 const WHAT_HAPPENS: Record<ExitIntent, string> = {
   close: 'Closing it returns you to the start screen.',
   'open-another': 'Opening another PDF replaces what is on screen.',
+  // ⚠️ These two say what the operation DOES to the amendments, not just that
+  // the document is replaced. Merge and convert build the new file from the
+  // source PDFs, so the annotation layer is not carried across — a fact that
+  // was previously discoverable only by losing an afternoon's markup to it.
+  merge: 'The merged PDF is built from the files themselves, so your annotations stay with this document rather than moving onto the result.',
+  convert: 'The converted PDF is built fresh, so your annotations stay with this document rather than moving onto the result.',
   quit: 'Closing the window shuts Universal PDF down.'
 }
 

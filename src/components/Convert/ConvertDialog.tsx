@@ -3,6 +3,7 @@ import { pdfToImages, imagesToPdf, type ImageFormat } from '../../lib/convert'
 import { downloadPdfBytes } from '../../lib/export'
 import { downloadZip } from '../../lib/zip'
 import { usePdfStore } from '../../stores/pdfStore'
+import { useExitGuard } from '../../stores/exitGuard'
 import { saveBlob } from '../../lib/saveFile'
 
 export type ConvertMode = 'pdf-to-images' | 'images-to-pdf'
@@ -35,6 +36,8 @@ export default function ConvertDialog({ initialMode, onClose, initialPdf }: Prop
   const pdfInputRef = useRef<HTMLInputElement>(null)
   const imgInputRef = useRef<HTMLInputElement>(null)
   const loadFile = usePdfStore((s) => s.loadFile)
+  const snapshotDocument = usePdfStore((s) => s.snapshotDocument)
+  const requestExit = useExitGuard((s) => s.requestExit)
 
   function switchMode(next: ConvertMode) {
     if (busy) return
@@ -79,10 +82,17 @@ export default function ConvertDialog({ initialMode, onClose, initialPdf }: Prop
         const file = new File([bytes.slice() as BlobPart], 'converted.pdf', {
           type: 'application/pdf'
         })
-        await loadFile(file)
-      } else {
-        downloadPdfBytes(bytes, 'converted.pdf')
+        // Same bargain as the merge dialog: the converted file replaces an
+        // annotated document without carrying its annotations, so it asks
+        // first — and leaves an undo step behind either way.
+        requestExit('convert', async () => {
+          snapshotDocument('convert')
+          await loadFile(file, { keepDocUndo: true })
+          onClose()
+        })
+        return
       }
+      downloadPdfBytes(bytes, 'converted.pdf')
       onClose()
     } catch (err) {
       console.error(err)

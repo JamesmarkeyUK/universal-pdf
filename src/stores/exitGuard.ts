@@ -11,6 +11,15 @@ export type ExitIntent =
   | 'close'
   /** Opening (or dropping) a different PDF over the top of this one. */
   | 'open-another'
+  /**
+   * Merging or converting the open document into a NEW one, which then replaces
+   * it (James, 2026-09-08: "I had annotations and then used the merge option
+   * thinking it would keep my annotations but it destroyed them and merged
+   * anew"). Merge works from the FILES, not from what is on screen, so the
+   * annotation layer does not travel — and nothing said so.
+   */
+  | 'merge'
+  | 'convert'
   /** Closing the desktop window / quitting the app. */
   | 'quit'
 
