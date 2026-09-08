@@ -174,8 +174,30 @@ const selectActive = async () =>
   )
 
 const pageBox = await page.locator('[data-page-index="0"] canvas').first().boundingBox()
+
+// ⚠️ EVERY CLICK STAYS IN THE TOP THIRD OF THE PAGE, and that is not cosmetic.
+//
+// PlacementHint centres its card over the document. The card itself is
+// `pointer-events-none` — deliberately, and its comment says why — but its two
+// buttons (Cancel / Don't show again) are `pointer-events-auto`, and they sit
+// dead centre. The original ladder stepped 60px per click from y+180, so the
+// FOURTH click landed on "Don't show again": the click was swallowed, the hint
+// was permanently dismissed, and the run needed a fifth click to place four
+// pieces.
+//
+// That read exactly like "the queue serves one placement too many" and was
+// recorded as such. It is not: the queue is correct and drains in four. The
+// pieces even land in the right order — the giveaway was a GAP in the placed
+// column where the fourth should have been, visible only in the DEBUG_SEP
+// frames.
+//
+// The underlying hazard is real and is a product question rather than a test
+// one: a live button parked over the middle of the page can eat the very tap
+// the card is instructing the user to make. That is written up in the backlog
+// for the owner; this harness simply stops colliding with it, so it can go back
+// to guarding what it is for.
 const dropAt = async (i) => {
-  await page.mouse.click(pageBox.x + 90 + i * 70, pageBox.y + 180 + i * 60)
+  await page.mouse.click(pageBox.x + 90 + i * 60, pageBox.y + 110 + i * 42)
   await page.waitForTimeout(260)
 }
 
