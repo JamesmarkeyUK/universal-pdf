@@ -71,7 +71,8 @@
     "cap:sync": "npm run build:mobile && npx cap sync && npm run check:mobile-bundle",
     "cap:open:ios": "npx cap open ios",
     "cap:open:android": "npx cap open android",
-    "test:redact-covers": "node e2e/redact-covers-match.e2e.mjs"
+    "test:redact-covers": "node e2e/redact-covers-match.e2e.mjs",
+    "test:image-border": "node e2e/image-border.e2e.mjs"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",

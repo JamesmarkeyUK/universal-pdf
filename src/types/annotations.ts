@@ -218,6 +218,20 @@ export type ImageAnnotation = Base & {
   // the branding — and re-render `src` in place. Absent on plain pictures, and
   // on codes placed before this existed, which stay ordinary images.
   qr?: QrPlacement
+  // Optional stroke drawn around the picture (owner ask, 2026-09-04). Absent on
+  // every image placed before this existed, and absent is NOT the same as
+  // width 0 — an image with no `border` key draws exactly as it always did,
+  // which is what keeps existing documents byte-identical on re-export.
+  border?: ImageBorder
+}
+
+export type ImageBorderStyle = 'solid' | 'dashed'
+
+export type ImageBorder = {
+  /** Stroke width in page units, matching every other annotation's `width`. */
+  width: number
+  color: string
+  style: ImageBorderStyle
 }
 
 // A "Request signature" placeholder box. Until it is signed it renders as a

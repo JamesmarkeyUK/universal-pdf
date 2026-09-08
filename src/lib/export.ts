@@ -465,6 +465,32 @@ export async function buildAnnotatedPdfBytes(
             height: sw(a.height),
             rotate: rot ? degrees(-rot) : undefined
           })
+          // Optional border (owner ask, 2026-09-04). Baked here as well as drawn
+          // in the viewer, or a bordered picture exports naked — which is the
+          // failure mode that matters, because the export is what gets sent.
+          //
+          // Drawn AFTER the image so the stroke sits on top of the picture edge
+          // rather than being half-covered by it, and `opacity: 0` keeps the
+          // rectangle's FILL invisible while the border still paints (the same
+          // trick the outline-only rect case above uses).
+          if (a.border && a.border.width > 0) {
+            page.drawRectangle({
+              x: sx(bx),
+              y: toY(by),
+              width: sw(a.width),
+              height: sw(a.height),
+              borderColor: hexToPdfRgb(a.border.color),
+              borderWidth: sw(a.border.width),
+              // ⚠️ pdf-lib takes the dash pattern in POINTS, already scaled —
+              // passing raw annotation units would give a dash that looks right
+              // on screen and wrong in the file at any zoom but 100%.
+              borderDashArray: a.border.style === 'dashed'
+                ? [sw(a.border.width * 3), sw(a.border.width * 2)]
+                : undefined,
+              opacity: 0,
+              rotate: rot ? degrees(-rot) : undefined
+            })
+          }
           break
         }
         case 'sigfield': {

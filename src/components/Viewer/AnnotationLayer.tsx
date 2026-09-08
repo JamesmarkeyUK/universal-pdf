@@ -36,7 +36,7 @@ import { isPaleFill, redactFillHex } from '../../lib/redactGate'
 import { FONT_CSS } from '../../lib/fonts'
 import { effectiveRuns, runFontStyle, runHasStyle, runsToPlainText, runsToHtml, parseRunsFromDom, mergeRuns } from '../../lib/textRuns'
 import { LINE_HEIGHT, layoutText, textBoxSize } from '../../lib/textLayout'
-import type { Annotation, DrawAnnotation, ImageAnnotation, SignatureData, SignatureFieldAnnotation, SigAlign, TextAnnotation, Tool, TextRun } from '../../types/annotations'
+import type { Annotation, DrawAnnotation, ImageAnnotation, ImageBorder, SignatureData, SignatureFieldAnnotation, SigAlign, TextAnnotation, Tool, TextRun } from '../../types/annotations'
 import type { QrPlacement } from '../../lib/qr/design'
 
 // On-screen font stacks, keyed by family id (shared with the toolbar + export).
@@ -417,6 +417,17 @@ function SignatureImage({
 }) {
   const img = useImage(a.src)
   if (!img) return null
+  // Optional border (owner ask, 2026-09-04). Konva.Image is a Shape, so it
+  // strokes its own width x height box — no wrapping Group, which matters
+  // because the Transformer attaches to this node by ref and a Group would
+  // change what "the selected thing" is for every existing drag/resize path.
+  //
+  // ⚠️ `strokeScaleEnabled={false}` is deliberate. Resizing a Konva node
+  // applies a SCALE rather than changing width/height, so a scaled stroke means
+  // a picture dragged wide shows a border thicker on two sides than the other
+  // two — and it would then bake that way, because the export writes one
+  // border width. Off, the on-screen stroke matches what pdf-lib draws.
+  const border = a.border
   return (
     <KonvaImage
       ref={shapeRef}
@@ -427,6 +438,12 @@ function SignatureImage({
       rotation={a.rotation ?? 0}
       width={a.width}
       height={a.height}
+      stroke={border && border.width > 0 ? border.color : undefined}
+      strokeWidth={border && border.width > 0 ? border.width : 0}
+      strokeScaleEnabled={false}
+      dash={border && border.style === 'dashed'
+        ? [border.width * 3, border.width * 2]
+        : undefined}
       draggable={draggable}
       onClick={onClick}
       onTap={onClick}
@@ -2856,6 +2873,136 @@ export default function AnnotationLayer({ pageIndex, width, height, scale }: Pro
                 selected, which is why it sits after the separator rather than
                 among the run-level toggles. */}
             <ColorCluster color={color} setColor={setColor} />
+          </div>
+        )
+      })()}
+
+      {(() => {
+        // Contextual IMAGE pill — a stroke around a placed picture (owner ask,
+        // 2026-09-04: "for images when placed have buttons to add a stroke
+        // around it (size, colour, some common shapes solid, dashed)").
+        //
+        // Same placement rules as the text pill above: prefers below, flips
+        // above near the page bottom, clamps horizontally, and keeps clear of
+        // the delete/confirm affordances at the top-right corner.
+        //
+        // ⚠️ Shown for a QR code, hidden for a signature. A framed QR is a
+        // reasonable thing to want; a framed signature is not — a box drawn
+        // around somebody's signature reads as a form field or an alteration of
+        // a signed document, which is the one place in this app where a
+        // decorative flourish could change what a page appears to MEAN.
+        // Signatures are `a.sig`; a picture of a signature has no `sig` and is
+        // treated as an ordinary image, which is correct: we only know about
+        // the ones we composed.
+        if (draggingId || editingId) return null
+        const selected = annotations.find((a) => a.id === selectedId)
+        if (!selected || selected.type !== 'image' || selected.sig) return null
+        const img = selected
+        const border = img.border
+        const bbox = getAnnotationBBox(selected)
+        const bx = bbox.x * scale
+        const by = bbox.y * scale
+        const bw = bbox.width * scale
+        const bh = bbox.height * scale
+        const CHIP_W = 300
+        const CHIP_H = 44
+        const GAP = 10
+        const left = Math.min(
+          Math.max(bx + bw / 2 - CHIP_W / 2, GAP),
+          Math.max(GAP, width - CHIP_W - GAP)
+        )
+        let top: number
+        if (by + bh + GAP + CHIP_H <= height) top = by + bh + GAP
+        else if (by - CHIP_H - GAP >= 0) top = by - CHIP_H - GAP
+        else top = Math.min(Math.max(by + bh + GAP, GAP), Math.max(GAP, height - CHIP_H - GAP))
+
+        // Widths in PAGE units, so a border looks the same at any zoom and
+        // bakes at the size it looked. `scale` divides for the same reason
+        // fontSize does above.
+        const WIDTHS = [1, 2, 4]
+        const setBorder = (next: ImageBorder | undefined) =>
+          update(img.id, { border: next } as Partial<Annotation>)
+
+        const pillBtn = (
+          active: boolean,
+          onClick: () => void,
+          label: React.ReactNode,
+          title: string,
+          extra = ''
+        ) => (
+          <button
+            type="button"
+            title={title}
+            aria-label={title}
+            aria-pressed={active}
+            onMouseDown={(e) => { e.stopPropagation(); e.preventDefault() }}
+            onClick={(e) => { e.stopPropagation(); onClick() }}
+            className={`h-8 min-w-8 px-2 rounded-lg text-sm flex items-center justify-center transition-colors ${extra} ${
+              active ? 'bg-orange-700 text-white' : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            {label}
+          </button>
+        )
+
+        return (
+          <div
+            style={{ position: 'absolute', left, top, zIndex: 22, width: CHIP_W }}
+            onMouseDown={(e) => e.stopPropagation()}
+            className="h-11 rounded-full bg-white shadow-lg border border-slate-300 flex items-center gap-1 px-2"
+          >
+            <span className="text-[11px] font-medium text-slate-500 pl-1 pr-0.5">Border</span>
+            {/* None is a real choice, not the absence of one — it clears the key
+                entirely rather than writing width 0, so an image that never had
+                a border and one whose border was removed export identically. */}
+            {pillBtn(!border, () => setBorder(undefined), 'None', 'No border', 'text-xs')}
+            <span className="w-px h-6 bg-slate-200 mx-0.5" />
+            {WIDTHS.map((w) => pillBtn(
+              !!border && Math.abs(border.width * scale - w) < 0.01,
+              () => setBorder({
+                width: w / scale,
+                color: border?.color ?? '#000000',
+                style: border?.style ?? 'solid',
+              }),
+              `${w}`,
+              `${w}px border`,
+              'text-xs tabular-nums',
+            ))}
+            <span className="w-px h-6 bg-slate-200 mx-0.5" />
+            {pillBtn(
+              border?.style === 'solid',
+              () => setBorder({
+                width: border?.width ?? 2 / scale,
+                color: border?.color ?? '#000000',
+                style: 'solid',
+              }),
+              <span className="block w-5 border-t-2 border-current" />,
+              'Solid',
+            )}
+            {pillBtn(
+              border?.style === 'dashed',
+              () => setBorder({
+                width: border?.width ?? 2 / scale,
+                color: border?.color ?? '#000000',
+                style: 'dashed',
+              }),
+              <span className="block w-5 border-t-2 border-dashed border-current" />,
+              'Dashed',
+            )}
+            <span className="w-px h-6 bg-slate-200 mx-0.5" />
+            {/* ⚠️ NOT ColorCluster's `setColor`: that is the store action, which
+                repaints the selected annotation's own `color` and sets the
+                default for the next one. An image has no `color`, and the
+                border must not hijack the drawing default — picking a red
+                border would otherwise make the next box red too. */}
+            <ColorCluster
+              color={border?.color ?? '#000000'}
+              setColor={(c) => setBorder({
+                width: border?.width ?? 2 / scale,
+                color: c,
+                style: border?.style ?? 'solid',
+              })}
+            />
           </div>
         )
       })()}
