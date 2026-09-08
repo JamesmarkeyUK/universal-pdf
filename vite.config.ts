@@ -27,7 +27,29 @@ function resolveBuildSha(): string {
   // Cloudflare hands over the FULL 40-character SHA, so the same commit used to
   // stamp two different markers depending on where it was built — and the marker
   // exists precisely to be compared against `git log` by eye.
-  if (process.env.CF_PAGES_COMMIT_SHA) return process.env.CF_PAGES_COMMIT_SHA.slice(0, 7)
+  // Also reads GITHUB_SHA, so an Actions build stamps the commit it is
+  // building rather than falling through.
+  const ciSha = process.env.CF_PAGES_COMMIT_SHA || process.env.GITHUB_SHA
+  if (ciSha) return ciSha.slice(0, 7)
+
+  // ⚠️ THE LOCAL-GIT FALLBACK MUST NEVER RUN IN CI. On 2026-07-26 a Pages
+  // build of b4e0699 fell through to it and shipped `ac02d14` — the PREVIOUS
+  // commit. The marker built to answer "is the live build current?" reported a
+  // stale-looking SHA for a perfectly current deploy, and cost a later session
+  // two days chasing a build that was never broken. In CI we emit 'unknown'
+  // instead: a marker that is obviously useless beats one that quietly lies.
+  //
+  // CF_PAGES is set by Cloudflare Pages; CI by essentially every other runner.
+  if (process.env.CF_PAGES || process.env.CI) {
+    console.warn(
+      '[build-sha] CI build with no commit SHA in the environment ' +
+        '(CF_PAGES_COMMIT_SHA / GITHUB_SHA). Emitting "unknown" — the local git ' +
+        "fallback reports the checkout's HEAD, which can disagree with the " +
+        'commit actually being deployed.',
+    )
+    return 'unknown'
+  }
+
   try {
     return execSync('git rev-parse --short HEAD').toString().trim()
   } catch {
