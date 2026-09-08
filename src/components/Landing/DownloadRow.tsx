@@ -3,7 +3,7 @@ import { useState } from 'react'
 const RELEASES = 'https://github.com/universal-simulation-ltd/Universal_PDF/releases/latest'
 
 // The same marks the download page on the marketing site uses, so the two read
-// as one product rather than two takes on the same five platforms.
+// as one product rather than two takes on the same four platforms.
 const ICON = 'h-[18px] w-[18px] shrink-0'
 
 function WindowsIcon() {
@@ -18,18 +18,6 @@ function AppleIcon() {
   return (
     <svg viewBox="0 0 24 24" className={ICON} aria-hidden="true">
       <path fill="currentColor" d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.53 4.09zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
-    </svg>
-  )
-}
-
-function LinuxIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className={ICON} aria-hidden="true">
-      <path fill="currentColor" d="M12 1.6c2.1 0 3.5 1.6 3.5 3.7v1.5c0 1 .4 1.8 1.1 2.6 1.1 1.3 1.9 2.7 2.3 4.2.4 1.5-.1 2.7-1.1 3.3.3 1 .5 1.9.5 2.6 0 2.2-2.8 4.1-6.3 4.1s-6.3-1.9-6.3-4.1c0-.7.2-1.6.5-2.6-1-.6-1.5-1.8-1.1-3.3.4-1.5 1.2-2.9 2.3-4.2.7-.8 1.1-1.6 1.1-2.6V5.3C8.5 3.2 9.9 1.6 12 1.6Z" />
-      <ellipse cx="10.35" cy="5.9" rx=".85" ry="1.15" fill="#fff" />
-      <ellipse cx="13.65" cy="5.9" rx=".85" ry="1.15" fill="#fff" />
-      <path d="M12 7.4c.75 0 1.35.42 1.35.85 0 .42-.6.95-1.35.95s-1.35-.53-1.35-.95c0-.43.6-.85 1.35-.85Z" fill="#fff" />
-      <path fill="currentColor" d="M8.1 21.3c-.5.5-1.9.9-2.4.4-.4-.5.3-1.3.9-1.9.5-.5 1.1-.8 1.6-.4.5.4.3 1.4-.1 1.9Zm7.8 0c.5.5 1.9.9 2.4.4.4-.5-.3-1.3-.9-1.9-.5-.5-1.1-.8-1.6-.4-.5.4-.3 1.4.1 1.9Z" />
     </svg>
   )
 }
@@ -99,12 +87,6 @@ export default function DownloadRow() {
           </a>
         </li>
         <li>
-          <a className={ITEM} href={RELEASES} rel="noopener" title="AppImage or .deb, 64-bit">
-            <LinuxIcon />
-            Linux
-          </a>
-        </li>
-        <li>
           <a className={ITEM} href={RELEASES} rel="noopener" title="Android package (.apk)">
             <AndroidIcon />
             Android
@@ -131,8 +113,7 @@ export default function DownloadRow() {
       )}
 
       <p className="mt-1 text-[12px] text-slate-400">
-        Free and open source, like the web version. Desktop builds are unsigned — Windows shows a
-        SmartScreen warning the first time.
+        Free and open source, like the web version. Desktop builds are unsigned.
       </p>
     </section>
   )
