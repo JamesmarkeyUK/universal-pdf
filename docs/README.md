@@ -524,6 +524,13 @@ reasons invisible from the screen, and a plain selection offered exactly one
 visible outcome: delete. It still only calls `setTool('select')` when a tool was
 actually armed; with Select active there is nothing to go back to.
 
+⚠️ **The bin is now the only button for deleting** (James, 2026-09-08). The
+desktop toolbar used to grow a red **Delete** whenever something was selected —
+the same command, further from the thing it acted on, and unpaired with a
+Confirm. It was removed rather than kept as a second route. `Del` / `Backspace`
+still work and still clear a whole multi-selection, which neither button ever
+did.
+
 ## Text boxes: the size pill, the handles, and where the lines break
 
 A text annotation is the only annotation whose *content* has a layout, and since
@@ -726,6 +733,15 @@ While you are editing, a redaction wide enough to hold it renders
 **"This will be redacted on export"** across itself. Without it a black rectangle
 is indistinguishable from a `rect` you have filled in, and the difference between
 those two is the entire point — one hides pixels, the other deletes text.
+
+**A box too narrow for the caption wears it ABOVE instead** (James, 2026-09-08).
+Find-and-redact draws its boxes the width of the matched word, nowhere near the
+~118pt the caption needs, so every box the app drew *for* you used to be the one
+kind with no caption at all — exactly backwards, since those are the boxes whose
+meaning you had no hand in. `redactHintGeom` decides inside-vs-above, and the
+drag path and the render path both go through it, so a box resized past the
+threshold flips mid-gesture rather than at the end of one. Above the block the
+caption is red-on-paper: out there it is a note about something not yet done.
 
 ⚠️ **It can never reach an exported file, structurally.** The hint is a Konva
 `Text` drawn by `AnnotationLayer`; the export path is
@@ -1698,6 +1714,36 @@ AcroForm field boxes visible, after a touchpad zoom):
 
 Still open here: no windowed rendering for very long documents —
 `renderBudget`'s `MIN_MAX_ZOOM` comment notes it.
+
+## Undo covers two histories, and only one order works
+
+`hooks/useUndo.ts` is the single place that knows there are two undo stacks, and
+every route to undo — `Ctrl+Z`, the Actions menu row, the phone toolbar's ↶ —
+goes through it (James, 2026-09-08: *"allow the undo option to undo things like
+merge too"*).
+
+- `annotationStore.past` holds arrays of annotations for **one set of bytes**.
+- `pdfStore` holds the **document** steps: merge, convert, a page delete, a
+  metadata scrub. Each replaces the bytes.
+
+A document-level change **clears the annotation history** on the way through, and
+deliberately so — a stroke drawn on the pre-merge document cannot be undone back
+onto the merged one. The side effect, until this existed, was that the largest
+changes in the app were the only ones nothing could take back.
+
+⚠️ **Annotations first, document second.** That is not a preference, it is the
+only order that can be correct: a document change empties the annotation stack,
+so anything still in it was necessarily drawn *after* the last document change
+and has to come off first. Reverse the two and undo puts the old document back
+while strokes made on the new one are still on screen.
+
+**Redo is annotations-only** and stays that way. The document stack holds whole
+PDFs as bytes; keeping a forward copy as well doubles the memory for the rarer
+half of a feature nobody has asked for.
+
+The menu row names the step when the next undo is a document one — *"Undo
+merge"* rather than a bare *"Undo"*, since otherwise there is no way to tell
+"un-draw that box" from "put the whole pre-merge document back".
 
 ## Suite context
 
