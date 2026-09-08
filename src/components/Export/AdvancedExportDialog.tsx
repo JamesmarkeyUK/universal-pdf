@@ -5,25 +5,27 @@ import { downloadPdfBytes, type CompressQuality } from '../../lib/export'
 import { nextExportName, previewExportName } from '../../lib/exportName'
 import { countRedactions, isRedactConfirmed } from '../../lib/redactGate'
 import { encryptPdf } from '../../lib/pdfEncrypt'
+import { scrubPdfMetadata } from '../../lib/pdfMetadata'
 import LockFields, { EMPTY_LOCK, lockIncomplete, lockPasswordOf, type LockState } from '../Lock/LockFields'
 import { markSaved } from '../../lib/unsavedChanges'
 import { RedactIcon } from '../icons/RedactIcon'
 import { useExportBuild } from './useExportBuild'
 
-// Actions ▸ Advanced ▸ Advanced export — the two things that change what the
-// exported file IS, rather than how big it is.
+// Actions ▸ Advanced ▸ Advanced export — the things that change what the
+// exported file IS, rather than how big it is: flatten, strip metadata, lock.
 //
-// ⚠️ WHY THESE TWO SHARE A DIALOG rather than being two rows in the Advanced
-// menu (owner decision, 2026-09-01). They are routinely wanted TOGETHER: the
+// ⚠️ WHY THEY SHARE A DIALOG rather than being rows in the Advanced menu
+// (owner decision, 2026-09-01). They are routinely wanted TOGETHER: the
 // document you flatten so nobody can edit what you signed is the same document
-// you then want sealed with a password. Two separate actions would mean
-// flatten, download, re-open the result, lock, download again — two files on
-// disk and a version number burnt on the intermediate one. Here both are
-// applied in one pass to one file.
+// you then want sealed with a password, and stripped of the author's name.
+// Separate actions would mean flatten, download, re-open the result, lock,
+// download again — two files on disk and a version number burnt on the
+// intermediate one. Here they are applied in one pass to one file.
 //
-// ⚠️ ORDER MATTERS AND IS NOT NEGOTIABLE: flatten first, encrypt second. The
-// rasteriser cannot read an encrypted document, so locking first produces
-// either an error or an unflattened file.
+// ⚠️ ORDER MATTERS AND IS NOT NEGOTIABLE: flatten, then scrub, then encrypt.
+// The rasteriser writes a fresh document carrying its own producer metadata,
+// so scrubbing before it would be undone; pdf-lib cannot open an encrypted
+// document at all, so both must happen before the lock.
 //
 // ⚠️ TWO ORTHOGONAL QUESTIONS, and until 2026-08-31 the export dialog asked
 // them as one. `CompressQuality` is a single scale — light / balanced / strong
@@ -87,6 +89,22 @@ export default function AdvancedExportDialog({ open, onClose }: Props) {
   const [locking, setLocking] = useState(false)
   const [lockError, setLockError] = useState<string | null>(null)
 
+  // ⚠️ SCRUBBING IS THE DEFAULT, and the checkbox is the way OUT of it (James,
+  // 2026-09-08: "any reason not to scrub the metadata by default? ... so we are
+  // privacy first"). Author, dates and producing app identify a person and do
+  // no work for the reader, so the file you hand someone should not carry them
+  // unless you meant it to.
+  //
+  // Held as `keepMeta` rather than as a `scrub` flag someone has to remember to
+  // invert: the state IS what the box says, so the box and the behaviour cannot
+  // drift apart.
+  //
+  // Metadata is stripped at DOWNLOAD time for the same reason locking is: it
+  // rewrites the finished bytes, and there is nothing to show for it in the
+  // dialog beforehand.
+  const [keepMeta, setKeepMeta] = useState(false)
+  const [scrubError, setScrubError] = useState<string | null>(null)
+
   const redactCount = countRedactions(annotations)
   const needsRedactConfirm = !isXfa && redactCount > 0
   const [redactConfirm, setRedactConfirm] = useState('')
@@ -102,6 +120,8 @@ export default function AdvancedExportDialog({ open, onClose }: Props) {
     // forgotten they typed.
     setLock(EMPTY_LOCK)
     setLockError(null)
+    setKeepMeta(false)
+    setScrubError(null)
   }, [open])
 
   useEffect(() => {
@@ -166,6 +186,24 @@ export default function AdvancedExportDialog({ open, onClose }: Props) {
     // buffer TypeScript will not narrow to ArrayBuffer; both are the same
     // thing at runtime.
     let bytes: Uint8Array = (flatten ? compressed!.bytes : annotated).slice()
+
+    // ⚠️ BEFORE the lock, after the flatten. Both neighbours are load-and-save
+    // passes over the whole document: the rasteriser writes a fresh file (with
+    // its own producer metadata) so scrubbing first would be undone, and
+    // pdf-lib cannot open an encrypted one at all, so scrubbing last would
+    // simply fail.
+    if (!keepMeta) {
+      setScrubError(null)
+      try {
+        bytes = new Uint8Array(await scrubPdfMetadata(bytes.slice().buffer as ArrayBuffer))
+      } catch (e) {
+        // Bail rather than fall through, on the same grounds as the lock below:
+        // handing over a file still carrying the author's name, to someone who
+        // ticked a box saying it would not, is worse than an error.
+        setScrubError((e as Error).message || 'Could not strip the metadata.')
+        return
+      }
+    }
 
     if (lock.enabled) {
       const password = lockPasswordOf(lock)
@@ -310,6 +348,49 @@ export default function AdvancedExportDialog({ open, onClose }: Props) {
                   flattened. Export again from the toolbar if you need the text back.
                 </div>
               )}
+            </div>
+
+            {/* Metadata, on the way out (James, 2026-09-08: "add scrub metadata
+                to the advanced export popup too", then "any reason not to scrub
+                the metadata by default?").
+                ⚠️ NOT the same command as Advanced ▸ Document metadata ▸ Strip.
+                That one rewrites the document you are working on — the author
+                and dates are gone from the file you keep. This applies to the
+                COPY being downloaded and leaves the open document alone, which
+                is the same bargain flattening makes two boxes up.
+                ⚠️ The caption says what the UNTICKED state does, deliberately.
+                A box nobody ticks is a box nobody reads, and this is the one
+                control here whose default CHANGES the file — so the sentence
+                has to work when the box is left alone. */}
+            <div className="mb-3">
+              <label className="flex items-start gap-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={keepMeta}
+                  onChange={(e) => setKeepMeta(e.target.checked)}
+                  disabled={building || compressing}
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-orange-700 disabled:cursor-wait"
+                />
+                <span className="min-w-0">
+                  <span className="block text-sm font-medium text-slate-900">Keep metadata</span>
+                  <span className="block text-xs text-slate-500 mt-0.5">
+                    {keepMeta
+                      ? 'The author, title, dates and producing app travel with the downloaded copy.'
+                      : 'The author, title, dates and producing app are removed from the downloaded copy. Your open document keeps its own.'}
+                  </span>
+                  {/* Only when it is about to happen. Stripping the XMP packet
+                      is what takes a PDF/A or PDF/UA document out of
+                      conformance, and takes any licence statement with it —
+                      invisible unless someone says so. */}
+                  {!keepMeta && (
+                    <span className="block text-xs text-amber-700 mt-1">
+                      Tick this for an archival (PDF/A), accessible (PDF/UA) or licensed
+                      document — their conformance and licence live in the metadata.
+                    </span>
+                  )}
+                </span>
+              </label>
+              {scrubError && <div className="mt-2 text-xs text-red-600">{scrubError}</div>}
             </div>
 
             {/* ⚠️ Below flattening, and that ordering is the point. The two
