@@ -630,17 +630,13 @@ export default function LandingPage() {
                       : defaultApp.platform === 'linux'
                         ? 'Linux'
                         : null
+                // No onToggle scroll on the fold below any more: @unisim/sdk
+                // >= 0.139.0 scrolls an opening fold into view for every
+                // product, and it does it better than the `block: 'end'` this
+                // used to do — that aligned the BOTTOM to the bottom, which
+                // shoves the summary you just clicked off the top of a phone.
                 return (
-                <details
-                  className="group mt-3"
-                  onToggle={(e) => {
-                    if (!e.currentTarget.open) return
-                    const el = e.currentTarget
-                    requestAnimationFrame(() =>
-                      el.scrollIntoView({ behavior: 'smooth', block: 'end' })
-                    )
-                  }}
-                >
+                <details className="group mt-3">
                   <summary className="flex items-center gap-2 cursor-pointer select-none list-none px-1 py-1 text-xs uppercase tracking-wide font-medium text-slate-500 hover:text-slate-700 transition-colors">
                     <span>{os ? `[${os}] ` : ''}System options</span>
                     <span
