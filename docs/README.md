@@ -1745,6 +1745,23 @@ The menu row names the step when the next undo is a document one — *"Undo
 merge"* rather than a bare *"Undo"*, since otherwise there is no way to tell
 "un-draw that box" from "put the whole pre-merge document back".
 
+## Opening a fold scrolls it into view — and the SDK does that, not this app
+
+The landing page's `<details>` used to carry its own `onToggle` +
+`scrollIntoView({ behavior: 'smooth', block: 'end' })`. That was removed in
+`63f5b63`: since `@unisim/sdk` **0.139.0** `UniversalProvider` installs the
+behaviour for every product in the suite, and the shared version is the better
+one — `block: 'end'` aligns the fold's **bottom** to the bottom of the screen,
+which on a phone shoves the summary you just clicked off the **top**. The shared
+one moves by the least it can and never scrolls the clicked row away.
+
+⚠️ **Don't add a scroll handler to a new `<details>` here** — it will fight the
+document-level listener. A React-state collapsible is covered too, but only if
+its trigger carries `aria-expanded` **and** `aria-controls`; with no
+`aria-controls` the SDK deliberately leaves it alone. The full note is in
+`packages/sdk/README.md` → *"Collapsibles that show what is inside them"* and
+`Docs_UNI_SIM/landmines.md`.
+
 ## Suite context
 
 This repo is one part of the **Universal Simulation suite** (the open-source
