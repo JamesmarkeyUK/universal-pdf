@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 
 const RELEASES = 'https://github.com/universal-simulation-ltd/Universal_PDF/releases/latest'
 
@@ -60,6 +60,7 @@ const ITEM =
  */
 export default function DownloadRow() {
   const [showIosHint, setShowIosHint] = useState(false)
+  const iosHintId = useId()
 
   // The desktop app is already the download; offering it one is noise.
   if (typeof window !== 'undefined' && window.desktop) return null
@@ -97,6 +98,7 @@ export default function DownloadRow() {
             type="button"
             className={ITEM}
             aria-expanded={showIosHint}
+            aria-controls={iosHintId}
             onClick={() => setShowIosHint((open) => !open)}
           >
             <IPhoneIcon />
@@ -106,7 +108,7 @@ export default function DownloadRow() {
       </ul>
 
       {showIosHint && (
-        <p className="mx-auto mt-1 max-w-sm text-[13px] text-slate-500">
+        <p id={iosHintId} className="mx-auto mt-1 max-w-sm text-[13px] text-slate-500">
           Not on the App Store yet. In Safari, tap <strong className="font-medium">Share</strong> →{' '}
           <strong className="font-medium">Add to Home Screen</strong> — it installs and runs offline.
         </p>

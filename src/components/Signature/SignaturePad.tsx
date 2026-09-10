@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { Stage, Layer, Line } from 'react-konva'
 import type Konva from 'konva'
 import { UnisimQr, useUniversal } from '@unisim/sdk'
@@ -119,6 +119,7 @@ export default function SignaturePad() {
   //         user positions with extra clicks (e.g. into a form's name field).
   const [separatePlacement, setSeparatePlacement] = useState(false)
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const advancedId = useId()
   // True when the box being fulfilled asked for live ink. Surfaced to the signer
   // so the requirement is visible to the person it constrains; the pad's own
   // Draw / Sign-on-phone modes already produce nothing but drawn ink, so there
@@ -714,13 +715,14 @@ export default function SignaturePad() {
               onClick={() => setAdvancedOpen((o) => !o)}
               className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-slate-700"
               aria-expanded={advancedOpen}
+              aria-controls={advancedId}
             >
               <span className={`transition-transform ${advancedOpen ? 'rotate-90' : ''}`}>▸</span>
               Advanced options
             </button>
 
             {advancedOpen && (
-              <div className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+              <div id={advancedId} className="mt-2 rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
                 <OptionToggle checked={realistic} onChange={setRealistic} label="Make it look more realistic" />
                 {/* One box, one switch. Every line typed becomes a line under
                     the signature; the first is set larger, because it is

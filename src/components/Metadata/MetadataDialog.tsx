@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { readPdfMetadata, type PdfMetadata } from '../../lib/pdfMetadata'
 import { usePdfStore } from '../../stores/pdfStore'
 
@@ -21,6 +21,7 @@ export default function MetadataDialog({ sourceBytes, onClose }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [scrubbed, setScrubbed] = useState(false)
   const [infoOpen, setInfoOpen] = useState(false)
+  const infoId = useId()
   // Ignore async results if the dialog closed mid-read (OcrModal pattern).
   const liveRef = useRef(true)
   // Read the bytes the dialog opened on, once. Scrubbing replaces the store's
@@ -98,6 +99,7 @@ export default function MetadataDialog({ sourceBytes, onClose }: Props) {
             type="button"
             onClick={() => setInfoOpen((v) => !v)}
             aria-expanded={infoOpen}
+            aria-controls={infoId}
             className="inline-flex items-center gap-1.5 text-xs text-slate-500 hover:text-orange-700 transition-colors"
           >
             <span
@@ -109,7 +111,7 @@ export default function MetadataDialog({ sourceBytes, onClose }: Props) {
             What is metadata?
           </button>
           {infoOpen && (
-            <p className="mt-2 text-xs text-slate-600 leading-relaxed bg-slate-50 rounded-lg px-3 py-2.5">
+            <p id={infoId} className="mt-2 text-xs text-slate-600 leading-relaxed bg-slate-50 rounded-lg px-3 py-2.5">
               Metadata is the hidden description a PDF carries about itself — who
               wrote it, which program made it, and when it was created and last
               edited. It travels with the file, so whoever you send it to can read
