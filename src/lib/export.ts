@@ -6,7 +6,7 @@ import { fontBase, type PdfBaseFont } from './fonts'
 import { LINE_HEIGHT, layoutText } from './textLayout'
 import { pdfjsLib, type PDFDocumentProxy } from './pdfjs'
 import { redactFillHex } from './redactGate'
-import { saveBlob } from './saveFile'
+import { saveBlob } from '@unisim/media/save'
 
 // Custom PDF catalog key carrying the unsigned signature-request boxes, so a
 // reopened or shared file's boxes stay interactive (movable / click-to-sign) in

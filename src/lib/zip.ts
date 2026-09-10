@@ -14,7 +14,7 @@
 // DOM-free so it can be self-tested in plain Node.
 
 import { zipBytes, type ZipEntry } from '@unisim/media'
-import { saveBlob } from './saveFile'
+import { saveBlob } from '@unisim/media/save'
 
 export type { ZipEntry }
 

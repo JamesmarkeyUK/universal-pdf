@@ -4,7 +4,7 @@ import { downloadPdfBytes } from '../../lib/export'
 import { downloadZip } from '../../lib/zip'
 import { usePdfStore } from '../../stores/pdfStore'
 import { useExitGuard } from '../../stores/exitGuard'
-import { saveBlob } from '../../lib/saveFile'
+import { saveBlob } from '@unisim/media/save'
 
 export type ConvertMode = 'pdf-to-images' | 'images-to-pdf'
 
