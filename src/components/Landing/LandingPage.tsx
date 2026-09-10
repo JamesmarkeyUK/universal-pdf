@@ -75,7 +75,6 @@ export default function LandingPage() {
   const compressInputRef = useRef<HTMLInputElement>(null)
   const ocrInputRef = useRef<HTMLInputElement>(null)
   const redactInputRef = useRef<HTMLInputElement>(null)
-  const advancedRef = useRef<HTMLDivElement>(null)
   const loadFile = usePdfStore((s) => s.loadFile)
   const hasRecents = usePdfStore((s) => s.recents.length > 0)
   const [opening, setOpening] = useState(false)
@@ -493,17 +492,12 @@ export default function LandingPage() {
                   carried nothing but the word. */}
               <button
                 type="button"
-                onClick={() => {
-                  const next = !advancedOpen
-                  setAdvancedOpen(next)
-                  // On a short screen the revealed options open below the fold;
-                  // bring them back into view once they have rendered.
-                  if (next) {
-                    requestAnimationFrame(() =>
-                      advancedRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
-                    )
-                  }
-                }}
+                // No scroll of our own: `aria-expanded` + `aria-controls` below
+                // are what the SDK's reveal-on-expand keys on, and it brings the
+                // options into view itself. A local `scrollIntoView` here scrolled
+                // twice, and its `block: 'end'` pushed this button off the top of
+                // a phone.
+                onClick={() => setAdvancedOpen(o => !o)}
                 aria-expanded={advancedOpen}
                 aria-controls="pdf-advanced-options"
                 aria-label={advancedOpen ? 'Hide advanced options' : 'Show advanced options'}
@@ -541,7 +535,7 @@ export default function LandingPage() {
               />
 
               {advancedOpen && (
-              <div id="pdf-advanced-options" ref={advancedRef}>
+              <div id="pdf-advanced-options">
 
                 {/* The four tools wear the same pill as the two above, so
                     expanding this doesn't drop a stack of chunky cards into a
