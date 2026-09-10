@@ -117,6 +117,7 @@
 		<string>unisim-polling</string>
 		<string>unisim-blackbook</string>
 		<string>unisim-ai</string>
+		<string>unisim-jukebox</string>
 	</array>
 	<!-- END unisim suite app links -->
 </dict>
